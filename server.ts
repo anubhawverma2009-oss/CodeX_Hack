@@ -32,44 +32,54 @@ class PythonBridge {
       } catch (e) {}
     }
 
-    this.daemon = spawn("python3", ["solution/server_daemon.py"], {
-      stdio: ["pipe", "pipe", "inherit"],
-    });
+    try {
+      this.daemon = spawn("python3", ["solution/server_daemon.py"], {
+        stdio: ["pipe", "pipe", "inherit"],
+      });
 
-    let buffer = "";
-    this.daemon.stdout?.on("data", (chunk: Buffer) => {
-      buffer += chunk.toString();
-      const lines = buffer.split("\n");
-      buffer = lines.pop() || "";
+      this.daemon.on("error", (err) => {
+        console.error("Python daemon spawn error:", err.message);
+        this.isReady = false;
+      });
 
-      for (const line of lines) {
-        if (!line.trim()) continue;
-        try {
-          const parsed = JSON.parse(line.trim());
-          const cb = this.pendingCallbacks.shift();
-          if (cb) cb(parsed);
-        } catch (err) {
-          console.error("Failed to parse daemon response:", line, err);
-        }
-      }
-    });
+      let buffer = "";
+      this.daemon.stdout?.on("data", (chunk: Buffer) => {
+        buffer += chunk.toString();
+        const lines = buffer.split("\n");
+        buffer = lines.pop() || "";
 
-    this.daemon.on("close", (code) => {
-      console.warn(`Python daemon exited with code ${code}. Restarting...`);
-      this.isReady = false;
-      setTimeout(() => this.startDaemon(), 1000);
-    });
-
-    setTimeout(() => {
-      this.sendCommand({ action: "status" }, (res) => {
-        if (res.status === "ok") {
-          this.numPages = res.num_pages || 272;
-          this.reportYear = res.report_year || 2023;
-          this.isReady = true;
-          console.log(`Python Daemon ready. Pages: ${this.numPages}, Year: ${this.reportYear}`);
+        for (const line of lines) {
+          if (!line.trim()) continue;
+          try {
+            const parsed = JSON.parse(line.trim());
+            const cb = this.pendingCallbacks.shift();
+            if (cb) cb(parsed);
+          } catch (err) {
+            console.error("Failed to parse daemon response:", line, err);
+          }
         }
       });
-    }, 1500);
+
+      this.daemon.on("close", (code) => {
+        console.warn(`Python daemon exited with code ${code}. Restarting...`);
+        this.isReady = false;
+        setTimeout(() => this.startDaemon(), 1000);
+      });
+
+      setTimeout(() => {
+        this.sendCommand({ action: "status" }, (res) => {
+          if (res.status === "ok") {
+            this.numPages = res.num_pages || 272;
+            this.reportYear = res.report_year || 2023;
+            this.isReady = true;
+            console.log(`Python Daemon ready. Pages: ${this.numPages}, Year: ${this.reportYear}`);
+          }
+        });
+      }, 1500);
+    } catch (err: any) {
+      console.error("Error creating Python daemon process:", err);
+      this.isReady = false;
+    }
   }
 
   public sendCommand(cmd: any, callback: (data: any) => void) {
@@ -116,7 +126,8 @@ class PythonBridge {
 
 async function startServer() {
   const app = express();
-  const PORT = 3000;
+  const PORT = Number(process.env.PORT) || 3000;
+  const HOST = "0.0.0.0";
   const bridge = new PythonBridge();
 
   app.use(express.json({ limit: "50mb" }));
@@ -345,17 +356,36 @@ async function startServer() {
     });
     app.use(vite.middlewares);
   } else {
-    app.use(express.static(path.resolve(".", "dist")));
-    app.get("*", (req, res) => {
-      res.sendFile(path.resolve(".", "dist", "index.html"));
-    });
+    const distPath = path.resolve(".", "dist");
+    if (fs.existsSync(distPath)) {
+      app.use(express.static(distPath));
+      app.get("*", (req, res) => {
+        const indexPath = path.resolve(distPath, "index.html");
+        if (fs.existsSync(indexPath)) {
+          res.sendFile(indexPath);
+        } else {
+          res.status(404).send("Index file not found in dist. Please run npm run build.");
+        }
+      });
+    } else {
+      console.warn("Dist directory missing in production mode. Static assets may be unavailable.");
+      app.get("*", (req, res) => {
+        res.status(404).send("Dist folder missing. Please run npm run build.");
+      });
+    }
   }
 
-  app.listen(PORT, "0.0.0.0", () => {
-    console.log(`P5 Report Navigator server running on http://0.0.0.0:${PORT}`);
+  const server = app.listen(PORT, HOST, () => {
+    console.log(`P5 Report Navigator server listening on http://${HOST}:${PORT} (NODE_ENV=${process.env.NODE_ENV || "development"})`);
+  });
+
+  server.on("error", (err: any) => {
+    console.error(`Express server failed to start on ${HOST}:${PORT}:`, err);
+    process.exit(1);
   });
 }
 
 startServer().catch((err) => {
-  console.error("Failed to start server:", err);
+  console.error("Fatal error during server startup:", err);
+  process.exit(1);
 });

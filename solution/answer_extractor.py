@@ -36,6 +36,21 @@ class AnswerExtractor:
                     confidence_basis: Optional[str],
                     ocr_used: bool) -> Dict[str, Any]:
         return {
+            # Flat top-level aliases for direct key access
+            "entity_type": entity if entity else "Not available",
+            "metric": metric if metric else "Not available",
+            "year": str(year) if year is not None else "Not available",
+            "retrieved_page": retrieved_page,
+            "table_title": table_name if table_name else "Not available",
+            "retrieval_method": method if method else "Not available",
+            "matched_row": matched_row if matched_row else "Not available",
+            "matched_col": matched_column if matched_column else "Not available",
+            "evidence_text": raw_line if raw_line else "Not available",
+            "confidence_score": confidence_score,
+            "confidence_basis": confidence_basis if confidence_basis else "Not available",
+            "ocr_used": ocr_used,
+
+            # Categorized sub-dictionaries for pipeline transparency
             "question_understanding": {
                 "entity": entity if entity else "Not available",
                 "metric": metric if metric else "Not available",

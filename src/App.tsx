@@ -27,6 +27,12 @@ import {
   FileX,
   FileSpreadsheet,
   Info,
+  Bot,
+  User,
+  Send,
+  Trash2,
+  MessageSquare,
+  Plus,
 } from "lucide-react";
 
 interface BenchmarkItem {
@@ -54,19 +60,41 @@ interface BenchmarkData {
 }
 
 export interface QueryTrace {
-  entity_type: string;
-  metric: string;
-  year: number;
-  is_unanswerable: boolean;
-  retrieved_page: number | null;
-  table_title: string;
-  retrieval_method: string;
-  matched_row: string;
-  matched_col: string;
-  evidence_text: string;
-  confidence_score: number;
-  confidence_basis: string;
-  ocr_used: boolean;
+  entity_type?: string;
+  metric?: string;
+  year?: number | string;
+  is_unanswerable?: boolean;
+  retrieved_page?: number | null;
+  table_title?: string;
+  retrieval_method?: string;
+  matched_row?: string;
+  matched_col?: string;
+  evidence_text?: string;
+  confidence_score?: number;
+  confidence_basis?: string;
+  ocr_used?: boolean;
+  question_understanding?: {
+    entity?: string;
+    metric?: string;
+    year?: string | number;
+  };
+  document_retrieval?: {
+    retrieved_page?: number | null;
+    table_name?: string;
+    method?: string;
+  };
+  answer_extraction?: {
+    matched_row?: string;
+    matched_column?: string;
+    extracted_value?: string;
+    raw_line?: string;
+  };
+  verification?: {
+    citation_page?: number | null;
+    confidence_score?: number;
+    confidence_basis?: string;
+    ocr_used?: boolean;
+  };
 }
 
 interface QueryResult {
@@ -84,6 +112,15 @@ interface QueryResult {
   trace?: QueryTrace;
 }
 
+export interface ChatMessage {
+  id: string;
+  sender: "user" | "assistant";
+  text: string;
+  result?: QueryResult;
+  timestamp: string;
+  isTraceExpanded?: boolean;
+}
+
 interface ActivePdfInfo {
   filename: string;
   path: string;
@@ -96,12 +133,28 @@ interface ActivePdfInfo {
 
 export default function App() {
   const [activeTab, setActiveTab] = useState<"playground" | "benchmark" | "architecture" | "submission">("playground");
-  const [questionInput, setQuestionInput] = useState<string>(
-    "What was the number of road accident deaths in Pune city in 2023?"
-  );
+  const [questionInput, setQuestionInput] = useState<string>("");
   const [isQuerying, setIsQuerying] = useState<boolean>(false);
-  const [queryResult, setQueryResult] = useState<QueryResult | null>(null); // Task 2: No hardcoded demo answer
-  const [isTraceOpen, setIsTraceOpen] = useState<boolean>(true);
+  const [queryResult, setQueryResult] = useState<QueryResult | null>(null);
+  const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
+  const chatEndRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [chatMessages, isQuerying]);
+
+  const toggleTrace = (msgId: string) => {
+    setChatMessages((prev) =>
+      prev.map((msg) =>
+        msg.id === msgId ? { ...msg, isTraceExpanded: !msg.isTraceExpanded } : msg
+      )
+    );
+  };
+
+  const handleClearChat = () => {
+    setChatMessages([]);
+    setQueryResult(null);
+  };
 
   // Active PDF state
   const [activePdf, setActivePdf] = useState<ActivePdfInfo>({
@@ -234,22 +287,64 @@ export default function App() {
     }
   };
 
-  const handleRunQuery = async (queryText?: string) => {
-    const q = queryText || questionInput;
-    if (!q.trim() || !activePdf.isReady) return;
+  const handleSendMessage = async (queryText?: string) => {
+    const q = (queryText !== undefined ? queryText : questionInput).trim();
+    if (!q || isQuerying || !activePdf.isReady) return;
+
+    const timeStr = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+    const userMsg: ChatMessage = {
+      id: `user-${Date.now()}-${Math.random()}`,
+      sender: "user",
+      text: q,
+      timestamp: timeStr,
+    };
+
+    setChatMessages((prev) => [...prev, userMsg]);
+    setQuestionInput("");
     setIsQuerying(true);
+
     try {
       const res = await fetch("/api/ask", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ question: q }),
       });
+
       if (res.ok) {
-        const data = await res.json();
+        const data: QueryResult = await res.json();
         setQueryResult(data);
+
+        const assistantMsg: ChatMessage = {
+          id: `assistant-${Date.now()}-${Math.random()}`,
+          sender: "assistant",
+          text:
+            data.answer === "NOT_FOUND"
+              ? "I searched the active report document, but the requested metric or entity was not present in the statistical tables (ABSTAIN)."
+              : `Extracted numerical value: ${data.answer}`,
+          result: data,
+          timestamp: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
+          isTraceExpanded: true,
+        };
+        setChatMessages((prev) => [...prev, assistantMsg]);
+      } else {
+        const errData = await res.json().catch(() => ({ error: "Query execution failed" }));
+        const errorMsg: ChatMessage = {
+          id: `assistant-${Date.now()}-${Math.random()}`,
+          sender: "assistant",
+          text: `Error: ${errData.error || "Execution error"}`,
+          timestamp: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
+        };
+        setChatMessages((prev) => [...prev, errorMsg]);
       }
-    } catch (err) {
-      console.error("Query failed", err);
+    } catch (err: any) {
+      console.error("Chat query failed:", err);
+      const errorMsg: ChatMessage = {
+        id: `assistant-${Date.now()}-${Math.random()}`,
+        sender: "assistant",
+        text: "Connection failed. Please ensure the backend server is running.",
+        timestamp: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
+      };
+      setChatMessages((prev) => [...prev, errorMsg]);
     } finally {
       setIsQuerying(false);
     }
@@ -395,21 +490,22 @@ export default function App() {
 
       {/* Main Content Area */}
       <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-6">
-        {/* TAB 1: PLAYGROUND */}
+        {/* TAB 1: PLAYGROUND (ChatGPT-Style Chatbot Interface) */}
         {activeTab === "playground" && (
-          <div className="space-y-6">
-            <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 shadow-xl">
-              <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 pb-4 border-b border-slate-800/80">
-                <div className="flex items-start gap-3">
+          <div className="flex flex-col space-y-4">
+            {/* Top Bar: Active Target Document Status & PDF Upload / Clear Chat Controls */}
+            <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 shadow-xl">
+              <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+                <div className="flex items-center gap-3">
                   <div className="w-10 h-10 rounded-xl bg-indigo-500/10 border border-indigo-500/20 flex items-center justify-center shrink-0">
                     <FileSpreadsheet className="w-5 h-5 text-indigo-400" />
                   </div>
                   <div>
                     <div className="flex items-center gap-2 flex-wrap">
                       <span className="text-xs font-bold text-slate-400 uppercase tracking-wider">
-                        Active Target Document:
+                        Active PDF Report:
                       </span>
-                      <span className="font-mono text-sm font-semibold text-white px-2 py-0.5 bg-slate-950 rounded border border-slate-800">
+                      <span className="font-mono text-xs font-semibold text-white px-2 py-0.5 bg-slate-950 rounded border border-slate-800">
                         {activePdf.filename}
                       </span>
                       {activePdf.isDefault ? (
@@ -418,22 +514,16 @@ export default function App() {
                         </span>
                       ) : (
                         <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/30 font-medium flex items-center gap-1">
-                          <CheckCircle2 className="w-3 h-3" /> User Uploaded (OCR Enabled)
+                          <CheckCircle2 className="w-3 h-3" /> Custom PDF (OCR Active)
                         </span>
                       )}
                     </div>
-                    <div className="flex items-center gap-3 mt-1.5 text-xs text-slate-400 flex-wrap">
-                      <span>
-                        Pages: <strong className="text-slate-200 font-mono">{activePdf.numPages}</strong>
-                      </span>
+                    <div className="flex items-center gap-3 mt-1 text-xs text-slate-400 flex-wrap">
+                      <span>Pages: <strong className="text-slate-200 font-mono">{activePdf.numPages}</strong></span>
                       <span>•</span>
-                      <span>
-                        Year: <strong className="text-slate-200 font-mono">{activePdf.reportYear}</strong>
-                      </span>
+                      <span>Report Year: <strong className="text-slate-200 font-mono">{activePdf.reportYear}</strong></span>
                       <span>•</span>
-                      <span>
-                        OCR Pipeline: <strong className="text-emerald-400 font-mono">{activePdf.ocrStatus}</strong>
-                      </span>
+                      <span>Engine: <strong className="text-emerald-400 font-mono">100% CPU Offline OCR</strong></span>
                     </div>
                   </div>
                 </div>
@@ -449,17 +539,17 @@ export default function App() {
                   <button
                     onClick={() => fileInputRef.current?.click()}
                     disabled={isUploading}
-                    className="px-3.5 py-2 bg-indigo-600 hover:bg-indigo-500 disabled:bg-slate-800 text-white text-xs font-medium rounded-xl transition flex items-center gap-2 shadow-sm"
+                    className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-500 disabled:bg-slate-800 text-white text-xs font-medium rounded-xl transition flex items-center gap-1.5 shadow-sm"
                   >
                     {isUploading ? (
                       <>
                         <RefreshCw className="w-3.5 h-3.5 animate-spin" />
-                        Processing PDF & OCR...
+                        Indexing PDF & OCR...
                       </>
                     ) : (
                       <>
                         <Upload className="w-3.5 h-3.5" />
-                        Upload Custom PDF
+                        Upload PDF
                       </>
                     )}
                   </button>
@@ -468,10 +558,21 @@ export default function App() {
                     <button
                       onClick={handleResetToDefault}
                       disabled={isUploading}
-                      className="px-3 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-medium rounded-xl border border-slate-700 transition flex items-center gap-1.5"
+                      className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-medium rounded-xl border border-slate-700 transition flex items-center gap-1.5"
                     >
                       <RotateCcw className="w-3.5 h-3.5" />
-                      Reset to Practice PDF
+                      Reset PDF
+                    </button>
+                  )}
+
+                  {chatMessages.length > 0 && (
+                    <button
+                      onClick={handleClearChat}
+                      className="px-3 py-1.5 bg-slate-800/80 hover:bg-rose-500/20 text-slate-300 hover:text-rose-300 text-xs font-medium rounded-xl border border-slate-700 hover:border-rose-500/40 transition flex items-center gap-1.5"
+                      title="Clear chat thread"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                      New Chat
                     </button>
                   )}
                 </div>
@@ -483,374 +584,310 @@ export default function App() {
                   <span>{uploadError}</span>
                 </div>
               )}
+            </div>
 
-              <div className="pt-4">
-                {/* How to ask questions hint box */}
-                <div className="mb-4 p-3.5 bg-slate-950/80 border border-indigo-500/25 rounded-xl">
-                  <div className="flex items-center gap-2 text-xs font-semibold text-indigo-300 mb-1.5">
-                    <HelpCircle className="w-4 h-4 text-indigo-400 shrink-0" />
-                    <span>How to ask questions:</span>
+            {/* Chat Conversation Window */}
+            <div className="bg-slate-900/80 border border-slate-800 rounded-2xl flex flex-col h-[650px] shadow-2xl overflow-hidden relative">
+              {/* Chat Thread Stream */}
+              <div className="flex-1 overflow-y-auto p-4 sm:p-6 space-y-6">
+                {chatMessages.length === 0 ? (
+                  /* Empty State: Welcome Banner & Suggested Questions */
+                  <div className="h-full flex flex-col items-center justify-center text-center p-6 space-y-6 max-w-2xl mx-auto">
+                    <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-indigo-500 to-emerald-400 p-0.5 shadow-xl shadow-indigo-500/10">
+                      <div className="w-full h-full bg-slate-950 rounded-[14px] flex items-center justify-center">
+                        <Bot className="w-8 h-8 text-indigo-400" />
+                      </div>
+                    </div>
+
+                    <div>
+                      <h2 className="text-xl font-extrabold text-white tracking-tight">
+                        Report Navigator Assistant
+                      </h2>
+                      <p className="text-xs text-slate-400 mt-1.5 max-w-md mx-auto leading-relaxed">
+                        Ask natural-language questions about fatality numbers, accident counts, or state/city statistics in <span className="text-indigo-300 font-semibold">{activePdf.filename}</span>.
+                      </p>
+                    </div>
+
+                    <div className="w-full text-left space-y-2 pt-2">
+                      <div className="text-[11px] font-bold text-slate-400 uppercase tracking-wider flex items-center gap-1.5">
+                        <Sparkles className="w-3.5 h-3.5 text-amber-400" />
+                        Try an example question to start:
+                      </div>
+
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                        {[
+                          {
+                            title: "Pune Deaths (2023)",
+                            q: "What was the number of road accident deaths in Pune in 2023?",
+                            desc: "City-level fatality extraction",
+                          },
+                          {
+                            title: "Rajasthan Accidents (2022)",
+                            q: "How many road accidents were reported in Rajasthan in 2022?",
+                            desc: "State-level metric extraction",
+                          },
+                          {
+                            title: "All India Fatalities (2023)",
+                            q: "What was the total number of fatalities in India in 2023?",
+                            desc: "National statistical total",
+                          },
+                          {
+                            title: "Allahabad 2-Wheelers (2023)",
+                            q: "How many two-wheeler riders were killed in Allahabad (Prayagraj) in 2023?",
+                            desc: "Vehicle category breakdown",
+                          },
+                          {
+                            title: "Ahmedabad Speeding (2023)",
+                            q: "How many road accident deaths in Ahmedabad in 2023 were attributed to over-speeding?",
+                            desc: "Cause-specific accident query",
+                          },
+                          {
+                            title: "Bareilly City (Abstain)",
+                            q: "How many road accidents were reported in Bareilly city in 2023?",
+                            desc: "Out-of-scope NOT_FOUND test",
+                          },
+                        ].map((item, idx) => (
+                          <button
+                            key={idx}
+                            onClick={() => handleSendMessage(item.q)}
+                            disabled={!activePdf.isReady || isUploading}
+                            className="p-3 bg-slate-950/90 hover:bg-slate-800/80 border border-slate-800 hover:border-indigo-500/40 rounded-xl text-left transition group shadow-sm flex flex-col justify-between space-y-1"
+                          >
+                            <div className="flex items-center justify-between text-xs font-semibold text-slate-200 group-hover:text-indigo-300">
+                              <span>{item.title}</span>
+                              <ArrowRight className="w-3 h-3 text-slate-500 group-hover:text-indigo-400 transition" />
+                            </div>
+                            <div className="text-[11px] text-slate-400 line-clamp-1">{item.q}</div>
+                          </button>
+                        ))}
+                      </div>
+                    </div>
                   </div>
-                  <p className="text-[11px] text-slate-400 mb-2.5">
-                    Ask natural-language questions specifying entity/location, metric, and year. Click an example below to try:
-                  </p>
-                  <div className="flex flex-wrap gap-1.5">
-                    {[
-                      "What was the number of road accident deaths in Pune in 2023?",
-                      "How many road accidents were reported in Rajasthan in 2022?",
-                      "What was the total number of fatalities in India in 2023?",
-                    ].map((ex, i) => (
-                      <button
-                        key={i}
-                        onClick={() => {
-                          setQuestionInput(ex);
-                          handleRunQuery(ex);
-                        }}
-                        className="text-xs px-2.5 py-1 bg-indigo-500/10 hover:bg-indigo-500/20 border border-indigo-500/30 text-indigo-200 rounded-lg transition text-left flex items-center gap-1.5"
-                      >
-                        <Sparkles className="w-3 h-3 text-amber-400 shrink-0" />
-                        <span>{ex}</span>
-                      </button>
-                    ))}
+                ) : (
+                  /* Chat Thread Messages */
+                  chatMessages.map((msg) => (
+                    <div key={msg.id}>
+                      {msg.sender === "user" ? (
+                        /* User Right-Aligned Chat Bubble */
+                        <div className="flex justify-end items-start gap-2.5 my-3">
+                          <div className="flex flex-col items-end max-w-[85%] sm:max-w-[75%]">
+                            <div className="bg-indigo-600 text-white rounded-2xl rounded-tr-xs px-4 py-3 text-sm shadow-md leading-relaxed">
+                              {msg.text}
+                            </div>
+                            <span className="text-[10px] text-slate-500 mt-1 font-mono px-1">
+                              {msg.timestamp}
+                            </span>
+                          </div>
+                          <div className="w-8 h-8 rounded-full bg-indigo-500/20 border border-indigo-500/30 flex items-center justify-center shrink-0 text-indigo-300">
+                            <User className="w-4 h-4" />
+                          </div>
+                        </div>
+                      ) : (
+                        /* Assistant Left-Aligned Response Card */
+                        <div className="flex justify-start items-start gap-2.5 my-4">
+                          <div className="w-8 h-8 rounded-full bg-gradient-to-br from-indigo-500 to-emerald-400 p-0.5 shrink-0 shadow-md">
+                            <div className="w-full h-full bg-slate-950 rounded-full flex items-center justify-center">
+                              <Bot className="w-4 h-4 text-indigo-400" />
+                            </div>
+                          </div>
+
+                          <div className="bg-slate-950 border border-slate-800 text-slate-100 rounded-2xl rounded-tl-xs p-5 shadow-xl max-w-[95%] lg:max-w-[88%] space-y-4">
+                            {/* Result Status & Citation Bar */}
+                            <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-800 pb-3">
+                              <div className="flex items-center gap-2">
+                                <span
+                                  className={`px-2.5 py-0.5 text-xs font-bold rounded-full ${
+                                    msg.result?.answer === "NOT_FOUND"
+                                      ? "bg-amber-500/10 text-amber-400 border border-amber-500/30"
+                                      : "bg-emerald-500/10 text-emerald-400 border border-emerald-500/30"
+                                  }`}
+                                >
+                                  {msg.result?.answer === "NOT_FOUND" ? "ABSTAIN (NOT_FOUND)" : "EXACT MATCH"}
+                                </span>
+                                {msg.result?.confidence !== undefined && (
+                                  <span className="text-xs text-slate-400 font-mono">
+                                    Confidence: <strong className="text-emerald-400">{msg.result.confidence} ({Math.round(msg.result.confidence * 100)}%)</strong>
+                                  </span>
+                                )}
+                              </div>
+
+                              {msg.result?.page ? (
+                                <button
+                                  onClick={() => inspectPage(msg.result!.page!)}
+                                  className="text-xs font-mono font-bold text-indigo-400 hover:text-indigo-300 bg-slate-900 border border-slate-800 px-2.5 py-1 rounded-lg flex items-center gap-1.5 transition"
+                                >
+                                  <BookOpen className="w-3.5 h-3.5 text-indigo-400" />
+                                  <span>PDF Citation: Page {msg.result.page}</span>
+                                  <ExternalLink className="w-3 h-3 text-slate-400" />
+                                </button>
+                              ) : (
+                                <span className="text-xs text-slate-500 font-mono">PDF Citation: null (Uncited)</span>
+                              )}
+                            </div>
+
+                            {/* Extracted Answer */}
+                            {msg.result ? (
+                              <div>
+                                <div className="text-xs text-slate-400 mb-1 font-medium">Extracted Numerical Answer:</div>
+                                <div className="font-mono text-3xl font-extrabold text-white tracking-tight bg-slate-900 px-4 py-2 rounded-xl border border-slate-800 inline-block">
+                                  {msg.result.answer}
+                                </div>
+                              </div>
+                            ) : (
+                              <p className="text-sm text-slate-200">{msg.text}</p>
+                            )}
+
+                            {/* Grounding Evidence Box */}
+                            {(msg.result?.trace?.answer_extraction?.raw_line || msg.result?.trace?.evidence_text || msg.result?.page_snippet) && (
+                              <div className="space-y-1.5">
+                                <div className="text-xs font-semibold text-slate-300 flex items-center gap-1.5">
+                                  <FileSpreadsheet className="w-3.5 h-3.5 text-indigo-400" />
+                                  Supporting Evidence Text:
+                                </div>
+                                <div className="p-3 bg-slate-900 border border-slate-800/80 rounded-xl font-mono text-xs text-slate-300 whitespace-pre-wrap leading-relaxed overflow-x-auto max-h-48">
+                                  {msg.result?.trace?.answer_extraction?.raw_line || msg.result?.trace?.evidence_text || msg.result?.page_snippet}
+                                </div>
+                              </div>
+                            )}
+
+                            {/* Expandable How Was This Answer Found? Trace Section */}
+                            {msg.result?.trace && (
+                              <div className="pt-2 border-t border-slate-800/80">
+                                <button
+                                  onClick={() => toggleTrace(msg.id)}
+                                  className="w-full px-3.5 py-2 bg-slate-900 hover:bg-slate-800/60 border border-slate-800 rounded-xl text-xs font-bold text-slate-300 flex items-center justify-between transition"
+                                >
+                                  <span className="flex items-center gap-2">
+                                    <Cpu className="w-3.5 h-3.5 text-emerald-400" />
+                                    How was this answer found?
+                                  </span>
+                                  {msg.isTraceExpanded ? (
+                                    <ChevronUp className="w-4 h-4 text-slate-400" />
+                                  ) : (
+                                    <ChevronDown className="w-4 h-4 text-slate-400" />
+                                  )}
+                                </button>
+
+                                {msg.isTraceExpanded && (
+                                  <div className="mt-3 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3 text-xs">
+                                    <div className="bg-slate-900/90 border border-slate-800 rounded-xl p-3 space-y-1">
+                                      <div className="font-bold text-indigo-400 uppercase text-[10px] tracking-wider flex items-center gap-1">
+                                        <Search className="w-3 h-3" /> 1. Question Analysis
+                                      </div>
+                                      <div className="text-[11px] space-y-0.5 text-slate-300">
+                                        <div>Entity: <strong className="text-white capitalize">{msg.result.trace.question_understanding?.entity || msg.result.trace.entity_type || "Not available"}</strong></div>
+                                        <div>Metric: <strong className="text-white capitalize">{msg.result.trace.question_understanding?.metric || msg.result.trace.metric || "Not available"}</strong></div>
+                                        <div>Year: <strong className="text-white">{msg.result.trace.question_understanding?.year || msg.result.trace.year || "Not available"}</strong></div>
+                                      </div>
+                                    </div>
+
+                                    <div className="bg-slate-900/90 border border-slate-800 rounded-xl p-3 space-y-1">
+                                      <div className="font-bold text-emerald-400 uppercase text-[10px] tracking-wider flex items-center gap-1">
+                                        <BookOpen className="w-3 h-3" /> 2. Document Retrieval
+                                      </div>
+                                      <div className="text-[11px] space-y-0.5 text-slate-300">
+                                        <div>Page: <strong className="text-emerald-300">{(msg.result.trace.document_retrieval?.retrieved_page || msg.result.trace.retrieved_page) ? `Page ${msg.result.trace.document_retrieval?.retrieved_page || msg.result.trace.retrieved_page}` : "Not available"}</strong></div>
+                                        <div className="truncate" title={msg.result.trace.document_retrieval?.table_name || msg.result.trace.table_title}>Table: <strong className="text-white">{msg.result.trace.document_retrieval?.table_name || msg.result.trace.table_title || "Not available"}</strong></div>
+                                        <div>Method: <strong className="text-slate-300">{msg.result.trace.document_retrieval?.method || msg.result.trace.retrieval_method || "Not available"}</strong></div>
+                                      </div>
+                                    </div>
+
+                                    <div className="bg-slate-900/90 border border-slate-800 rounded-xl p-3 space-y-1">
+                                      <div className="font-bold text-amber-400 uppercase text-[10px] tracking-wider flex items-center gap-1">
+                                        <Layers className="w-3 h-3" /> 3. Table Extraction
+                                      </div>
+                                      <div className="text-[11px] space-y-0.5 text-slate-300">
+                                        <div className="truncate" title={msg.result.trace.answer_extraction?.matched_row || msg.result.trace.matched_row}>Row: <strong className="text-white">{msg.result.trace.answer_extraction?.matched_row || msg.result.trace.matched_row || "Not available"}</strong></div>
+                                        <div className="truncate" title={msg.result.trace.answer_extraction?.matched_column || msg.result.trace.matched_col}>Col: <strong className="text-white">{msg.result.trace.answer_extraction?.matched_column || msg.result.trace.matched_col || "Not available"}</strong></div>
+                                        <div>Value: <strong className="text-amber-400 font-mono">{msg.result.answer}</strong></div>
+                                      </div>
+                                    </div>
+
+                                    <div className="bg-slate-900/90 border border-slate-800 rounded-xl p-3 space-y-1">
+                                      <div className="font-bold text-purple-400 uppercase text-[10px] tracking-wider flex items-center gap-1">
+                                        <ShieldCheck className="w-3 h-3" /> 4. Verification & OCR
+                                      </div>
+                                      <div className="text-[11px] space-y-0.5 text-slate-300">
+                                        <div>Citation: <strong className="text-purple-300">{msg.result.page ? `Page ${msg.result.page}` : "null"}</strong></div>
+                                        <div className="truncate" title={msg.result.trace.verification?.confidence_basis || msg.result.trace.confidence_basis}>Basis: <strong className="text-white">{msg.result.trace.verification?.confidence_basis || msg.result.trace.confidence_basis || "Not available"}</strong></div>
+                                        <div>OCR: <strong className={(msg.result.trace.verification?.ocr_used || msg.result.trace.ocr_used) ? "text-emerald-400" : "text-slate-400"}>{(msg.result.trace.verification?.ocr_used || msg.result.trace.ocr_used) ? "Active" : "PDF Text"}</strong></div>
+                                      </div>
+                                    </div>
+                                  </div>
+                                )}
+                              </div>
+                            )}
+
+                            <div className="text-[10px] text-slate-500 font-mono text-right">
+                              {msg.timestamp}
+                            </div>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  ))
+                )}
+
+                {/* Loading / Typing Feedback */}
+                {isQuerying && (
+                  <div className="flex justify-start items-center gap-2.5 my-4">
+                    <div className="w-8 h-8 rounded-full bg-gradient-to-br from-indigo-500 to-emerald-400 p-0.5 shrink-0 animate-pulse">
+                      <div className="w-full h-full bg-slate-950 rounded-full flex items-center justify-center">
+                        <Bot className="w-4 h-4 text-indigo-400" />
+                      </div>
+                    </div>
+                    <div className="bg-slate-950 border border-slate-800 rounded-2xl rounded-tl-xs px-4 py-3 text-xs text-indigo-300 flex items-center gap-2 shadow-lg">
+                      <RefreshCw className="w-3.5 h-3.5 animate-spin text-indigo-400" />
+                      <span>Extracting from statistical tables in active PDF...</span>
+                    </div>
                   </div>
-                </div>
+                )}
 
-                <div className="flex items-center justify-between mb-2">
-                  <label className="text-xs font-semibold text-slate-300 flex items-center gap-1.5">
-                    <Search className="w-3.5 h-3.5 text-indigo-400" />
-                    Query the active document:
-                  </label>
-                  <span className="text-[11px] text-slate-500 font-mono">
-                    Live inference (No precomputed answers)
-                  </span>
-                </div>
+                <div ref={chatEndRef} />
+              </div>
 
-                <div className="flex gap-2">
-                  <input
-                    type="text"
-                    value={questionInput}
-                    onChange={(e) => setQuestionInput(e.target.value)}
-                    onKeyDown={(e) => e.key === "Enter" && handleRunQuery()}
-                    disabled={!activePdf.isReady || isUploading}
-                    placeholder="e.g. How many two-wheeler riders were killed in road accidents in Varanasi in 2023?"
-                    className="flex-1 bg-slate-950 border border-slate-700 rounded-xl px-4 py-2.5 text-sm text-slate-100 placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent transition disabled:opacity-50"
-                  />
+              {/* Bottom Sticky Input Bar */}
+              <div className="p-3.5 bg-slate-950 border-t border-slate-800">
+                <div className="flex items-center gap-2">
+                  <div className="relative flex-1">
+                    <Search className="w-4 h-4 text-slate-500 absolute left-3.5 top-1/2 -translate-y-1/2 pointer-events-none" />
+                    <input
+                      type="text"
+                      value={questionInput}
+                      onChange={(e) => setQuestionInput(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter" && !e.shiftKey) {
+                          e.preventDefault();
+                          handleSendMessage();
+                        }
+                      }}
+                      disabled={!activePdf.isReady || isUploading || isQuerying}
+                      placeholder="Ask a question about the active PDF report (e.g. What was the number of road accident deaths in Pune in 2023?)..."
+                      className="w-full bg-slate-900 border border-slate-800 rounded-xl pl-10 pr-4 py-3 text-sm text-slate-100 placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent transition disabled:opacity-50"
+                    />
+                  </div>
+
                   <button
-                    onClick={() => handleRunQuery()}
-                    disabled={isQuerying || !activePdf.isReady || isUploading}
-                    className="px-5 py-2.5 bg-indigo-600 hover:bg-indigo-500 disabled:bg-slate-800 text-white text-sm font-medium rounded-xl transition flex items-center gap-2 shadow-lg shadow-indigo-600/20 shrink-0"
+                    onClick={() => handleSendMessage()}
+                    disabled={!questionInput.trim() || isQuerying || !activePdf.isReady || isUploading}
+                    className="px-5 py-3 bg-indigo-600 hover:bg-indigo-500 disabled:bg-slate-800 text-white font-medium text-sm rounded-xl transition flex items-center gap-2 shadow-lg shadow-indigo-600/20 shrink-0"
                   >
                     {isQuerying ? (
-                      <>
-                        <RefreshCw className="w-4 h-4 animate-spin text-white" />
-                        Extracting...
-                      </>
+                      <RefreshCw className="w-4 h-4 animate-spin" />
                     ) : (
                       <>
-                        <ArrowRight className="w-4 h-4" />
-                        Find Answer
+                        <span>Send</span>
+                        <Send className="w-4 h-4" />
                       </>
                     )}
                   </button>
                 </div>
 
-                <div className="mt-3.5 pt-3 border-t border-slate-800/60">
-                  <div className="text-[11px] font-medium text-slate-400 mb-2 flex items-center gap-1.5">
-                    <Sparkles className="w-3 h-3 text-amber-400" />
-                    Additional Sample Benchmark Queries:
-                  </div>
-                  <div className="flex flex-wrap gap-1.5">
-                    {sampleQueries.map((item, idx) => (
-                      <button
-                        key={idx}
-                        onClick={() => {
-                          setQuestionInput(item.text);
-                          handleRunQuery(item.text);
-                        }}
-                        className="text-xs px-2.5 py-1 bg-slate-800/80 hover:bg-slate-700/80 border border-slate-700 text-slate-300 hover:text-white rounded-lg transition"
-                      >
-                        {item.label}
-                      </button>
-                    ))}
-                  </div>
+                <div className="text-[10px] text-slate-500 mt-2 text-center">
+                  100% Offline CPU Deterministic Extraction · Direct PDF Table Citations · No Cloud LLM API
                 </div>
               </div>
             </div>
-
-            {/* Answer Display or Neutral Empty State (Task 2) */}
-            {queryResult ? (
-              <div className="space-y-6">
-                <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-                  <div className="lg:col-span-1 bg-slate-900 border border-slate-800 rounded-2xl p-5 shadow-xl flex flex-col justify-between">
-                    <div>
-                      <div className="flex items-center justify-between mb-4">
-                        <span className="text-xs font-semibold text-slate-400 uppercase tracking-wider">
-                          Prediction Result
-                        </span>
-                        <span
-                          className={`px-2.5 py-0.5 text-xs font-bold rounded-full ${
-                            queryResult.answer === "NOT_FOUND"
-                              ? "bg-amber-500/10 text-amber-400 border border-amber-500/30"
-                              : "bg-emerald-500/10 text-emerald-400 border border-emerald-500/30"
-                          }`}
-                        >
-                          {queryResult.answer === "NOT_FOUND" ? "ABSTAIN" : "EXACT MATCH"}
-                        </span>
-                      </div>
-
-                      <div className="text-xs text-slate-400 mb-1">Extracted Answer</div>
-                      <div className="font-mono text-4xl font-extrabold text-white tracking-tight mb-4">
-                        {queryResult.answer}
-                      </div>
-
-                      <div className="space-y-2.5 border-t border-slate-800 pt-3">
-                        <div className="flex items-center justify-between text-xs">
-                          <span className="text-slate-400">PDF Citation Page:</span>
-                          {queryResult.page ? (
-                            <button
-                              onClick={() => inspectPage(queryResult.page!)}
-                              className="font-mono font-bold text-indigo-400 hover:underline flex items-center gap-1"
-                            >
-                              Page {queryResult.page} of {activePdf.numPages}
-                              <ExternalLink className="w-3 h-3" />
-                            </button>
-                          ) : (
-                            <span className="text-slate-500 font-mono">null (Uncited)</span>
-                          )}
-                        </div>
-
-                        <div className="flex items-center justify-between text-xs">
-                          <span className="text-slate-400">Confidence Score:</span>
-                          <span className="font-mono font-bold text-emerald-400">
-                            {queryResult.confidence} ({Math.round(queryResult.confidence * 100)}%)
-                          </span>
-                        </div>
-
-                        {queryResult.query_analysis && (
-                          <>
-                            <div className="flex items-center justify-between text-xs">
-                              <span className="text-slate-400">Entity Recognized:</span>
-                              <span className="font-mono text-slate-200 capitalize">
-                                {queryResult.query_analysis.entity_type}
-                              </span>
-                            </div>
-                            <div className="flex items-center justify-between text-xs">
-                              <span className="text-slate-400">Target Metric:</span>
-                              <span className="font-mono text-slate-200 capitalize">
-                                {queryResult.query_analysis.metric}
-                              </span>
-                            </div>
-                            <div className="flex items-center justify-between text-xs">
-                              <span className="text-slate-400">Target Year:</span>
-                              <span className="font-mono text-slate-200">{queryResult.query_analysis.year}</span>
-                            </div>
-                          </>
-                        )}
-                      </div>
-                    </div>
-
-                    <div className="mt-4 pt-3 border-t border-slate-800/80 text-[11px] text-slate-500">
-                      Format: Strict JSONL standard format <code className="text-indigo-400">{"{id, answer, page, confidence}"}</code>
-                    </div>
-                  </div>
-
-                  <div className="lg:col-span-2 bg-slate-900 border border-slate-800 rounded-2xl p-5 shadow-xl flex flex-col">
-                    <div className="flex items-center justify-between mb-3">
-                      <div className="flex items-center gap-2">
-                        <BookOpen className="w-4 h-4 text-indigo-400" />
-                        <h3 className="text-sm font-semibold text-white">
-                          Document Grounding & Citation Excerpt
-                        </h3>
-                      </div>
-                      {queryResult.page && (
-                        <span className="text-xs text-slate-400">
-                          Extracted directly from Page <span className="text-white font-bold">{queryResult.page}</span>
-                        </span>
-                      )}
-                    </div>
-
-                    {queryResult.page_snippet ? (
-                      <div className="flex-1 bg-slate-950 border border-slate-800 rounded-xl p-3.5 font-mono text-xs text-slate-300 whitespace-pre-wrap overflow-x-auto leading-relaxed">
-                        {queryResult.page_snippet}
-                      </div>
-                    ) : (
-                      <div className="flex-1 bg-slate-950 border border-slate-800 rounded-xl p-8 flex flex-col items-center justify-center text-center text-slate-400">
-                        <ShieldCheck className="w-10 h-10 text-amber-400 mb-2" />
-                        <p className="text-sm font-medium text-slate-200">Abstention Validated</p>
-                        <p className="text-xs text-slate-400 max-w-sm mt-1">
-                          The requested metric or entity was not present in the statistical tables. The system correctly returns <code className="text-amber-400 font-bold">NOT_FOUND</code> without hallucinating.
-                        </p>
-                      </div>
-                    )}
-                  </div>
-                </div>
-
-                {/* Collapsible Section: How Was This Answer Found? */}
-                <div className="bg-slate-900 border border-slate-800 rounded-2xl shadow-xl overflow-hidden">
-                  <button
-                    onClick={() => setIsTraceOpen(!isTraceOpen)}
-                    className="w-full px-5 py-4 flex items-center justify-between bg-slate-800/40 hover:bg-slate-800/70 transition border-b border-slate-800/60"
-                  >
-                    <div className="flex items-center gap-2.5">
-                      <Cpu className="w-4 h-4 text-emerald-400" />
-                      <h3 className="text-sm font-bold text-white tracking-tight">
-                        How Was This Answer Found?
-                      </h3>
-                      <span className="text-[10px] font-semibold px-2 py-0.5 bg-emerald-500/10 text-emerald-400 border border-emerald-500/30 rounded-full font-mono">
-                        Transparent Pipeline Trace
-                      </span>
-                    </div>
-                    <div className="flex items-center gap-1.5 text-xs text-slate-400">
-                      <span>{isTraceOpen ? "Hide Trace Details" : "Show Trace Details"}</span>
-                      {isTraceOpen ? <ChevronUp className="w-4 h-4 text-slate-400" /> : <ChevronDown className="w-4 h-4 text-slate-400" />}
-                    </div>
-                  </button>
-
-                  {isTraceOpen && (
-                    <div className="p-5 space-y-5">
-                      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-                        {/* 1. Question Understanding */}
-                        <div className="bg-slate-950 border border-slate-800 rounded-xl p-4 space-y-2.5">
-                          <div className="flex items-center gap-2 text-xs font-bold text-indigo-400 uppercase tracking-wider">
-                            <Search className="w-3.5 h-3.5" />
-                            1. Question Understanding
-                          </div>
-                          <div className="space-y-1.5 text-xs">
-                            <div className="flex justify-between items-center border-b border-slate-800/60 pb-1">
-                              <span className="text-slate-400">Extracted Location:</span>
-                              <span className="font-mono font-semibold text-slate-200 capitalize">
-                                {queryResult.trace?.entity_type || queryResult.query_analysis?.entity_type || "Not available"}
-                              </span>
-                            </div>
-                            <div className="flex justify-between items-center border-b border-slate-800/60 pb-1">
-                              <span className="text-slate-400">Requested Metric:</span>
-                              <span className="font-mono font-semibold text-slate-200 capitalize">
-                                {queryResult.trace?.metric || queryResult.query_analysis?.metric || "Not available"}
-                              </span>
-                            </div>
-                            <div className="flex justify-between items-center">
-                              <span className="text-slate-400">Requested Year:</span>
-                              <span className="font-mono font-semibold text-slate-200">
-                                {queryResult.trace?.year || queryResult.query_analysis?.year || "Not available"}
-                              </span>
-                            </div>
-                          </div>
-                        </div>
-
-                        {/* 2. Document Retrieval */}
-                        <div className="bg-slate-950 border border-slate-800 rounded-xl p-4 space-y-2.5">
-                          <div className="flex items-center gap-2 text-xs font-bold text-emerald-400 uppercase tracking-wider">
-                            <BookOpen className="w-3.5 h-3.5" />
-                            2. Document Retrieval
-                          </div>
-                          <div className="space-y-1.5 text-xs">
-                            <div className="flex justify-between items-center border-b border-slate-800/60 pb-1">
-                              <span className="text-slate-400">Retrieved PDF Page:</span>
-                              <span className="font-mono font-semibold text-emerald-300">
-                                {queryResult.trace?.retrieved_page ? `Page ${queryResult.trace.retrieved_page}` : "Not available"}
-                              </span>
-                            </div>
-                            <div className="flex justify-between items-center border-b border-slate-800/60 pb-1">
-                              <span className="text-slate-400">Matched Table:</span>
-                              <span className="font-mono font-semibold text-slate-200 truncate max-w-[130px]" title={queryResult.trace?.table_title || "Not available"}>
-                                {queryResult.trace?.table_title || "Not available"}
-                              </span>
-                            </div>
-                            <div className="flex justify-between items-center">
-                              <span className="text-slate-400">Retrieval Method:</span>
-                              <span className="font-mono font-semibold text-slate-200 text-[11px]">
-                                {queryResult.trace?.retrieval_method || "Not available"}
-                              </span>
-                            </div>
-                          </div>
-                        </div>
-
-                        {/* 3. Answer Extraction */}
-                        <div className="bg-slate-950 border border-slate-800 rounded-xl p-4 space-y-2.5">
-                          <div className="flex items-center gap-2 text-xs font-bold text-amber-400 uppercase tracking-wider">
-                            <Layers className="w-3.5 h-3.5" />
-                            3. Answer Extraction
-                          </div>
-                          <div className="space-y-1.5 text-xs">
-                            <div className="flex justify-between items-center border-b border-slate-800/60 pb-1">
-                              <span className="text-slate-400">Matched Row:</span>
-                              <span className="font-mono font-semibold text-slate-200 truncate max-w-[130px]" title={queryResult.trace?.matched_row || "Not available"}>
-                                {queryResult.trace?.matched_row || "Not available"}
-                              </span>
-                            </div>
-                            <div className="flex justify-between items-center border-b border-slate-800/60 pb-1">
-                              <span className="text-slate-400">Matched Column:</span>
-                              <span className="font-mono font-semibold text-slate-200 truncate max-w-[130px]" title={queryResult.trace?.matched_col || "Not available"}>
-                                {queryResult.trace?.matched_col || "Not available"}
-                              </span>
-                            </div>
-                            <div className="flex justify-between items-center">
-                              <span className="text-slate-400">Extracted Value:</span>
-                              <span className="font-mono font-bold text-amber-400">
-                                {queryResult.answer || "Not available"}
-                              </span>
-                            </div>
-                          </div>
-                        </div>
-
-                        {/* 4. Verification */}
-                        <div className="bg-slate-950 border border-slate-800 rounded-xl p-4 space-y-2.5">
-                          <div className="flex items-center gap-2 text-xs font-bold text-purple-400 uppercase tracking-wider">
-                            <ShieldCheck className="w-3.5 h-3.5" />
-                            4. Verification & OCR
-                          </div>
-                          <div className="space-y-1.5 text-xs">
-                            <div className="flex justify-between items-center border-b border-slate-800/60 pb-1">
-                              <span className="text-slate-400">Citation Page:</span>
-                              <span className="font-mono font-semibold text-purple-300">
-                                {queryResult.page ? `Page ${queryResult.page}` : "null (Uncited)"}
-                              </span>
-                            </div>
-                            <div className="flex justify-between items-center border-b border-slate-800/60 pb-1">
-                              <span className="text-slate-400">Confidence Basis:</span>
-                              <span className="font-mono font-semibold text-slate-200 text-[10px] truncate max-w-[120px]" title={queryResult.trace?.confidence_basis || "Not available"}>
-                                {queryResult.trace?.confidence_basis || "Not available"}
-                              </span>
-                            </div>
-                            <div className="flex justify-between items-center">
-                              <span className="text-slate-400">OCR Executed:</span>
-                              <span className={`font-mono font-semibold text-[11px] ${queryResult.trace?.ocr_used ? "text-emerald-400" : "text-slate-400"}`}>
-                                {queryResult.trace?.ocr_used !== undefined ? (queryResult.trace.ocr_used ? "Yes (OCR Active)" : "No (PDF Text)") : "Not available"}
-                              </span>
-                            </div>
-                          </div>
-                        </div>
-                      </div>
-
-                      {/* Raw Evidence Text Box */}
-                      <div className="bg-slate-950 border border-slate-800 rounded-xl p-4 space-y-2">
-                        <div className="flex items-center justify-between text-xs">
-                          <span className="font-semibold text-slate-300 flex items-center gap-1.5">
-                            <FileSpreadsheet className="w-3.5 h-3.5 text-indigo-400" />
-                            Grounding Evidence Text (Source PDF Page Line):
-                          </span>
-                          <span className="text-[11px] text-slate-500 font-mono">
-                            Direct unedited PDF page content
-                          </span>
-                        </div>
-                        <div className="p-3 bg-slate-900 border border-slate-800/80 rounded-lg font-mono text-xs text-slate-300 whitespace-pre-wrap leading-relaxed">
-                          {queryResult.trace?.evidence_text || queryResult.page_snippet || "Not available"}
-                        </div>
-                      </div>
-                    </div>
-                  )}
-                </div>
-              </div>
-            ) : (
-              // Neutral empty state (Task 2)
-              <div className="bg-slate-900 border border-slate-800 rounded-2xl p-8 text-center text-slate-400 flex flex-col items-center justify-center space-y-3 shadow-xl">
-                <Info className="w-10 h-10 text-indigo-400" />
-                <h3 className="text-sm font-semibold text-white">Ready for Live Inference</h3>
-                <p className="text-xs text-slate-400 max-w-md">
-                  Enter a question above or click one of the quick test examples to run real-time deterministic extraction against the active PDF report.
-                </p>
-              </div>
-            )}
           </div>
         )}
 
@@ -991,7 +1028,7 @@ export default function App() {
                         className="hover:bg-slate-800/30 transition-colors group cursor-pointer"
                         onClick={() => {
                           setQuestionInput(item.question);
-                          handleRunQuery(item.question);
+                          handleSendMessage(item.question);
                           setActiveTab("playground");
                         }}
                       >
