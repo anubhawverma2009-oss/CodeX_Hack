@@ -19,6 +19,7 @@ class PDFProcessor:
         self.enable_ocr = enable_ocr
         self.ocr_processor = OCRProcessor()
         self.pages_text: Dict[int, str] = {}
+        self.ocr_pages: set = set()
         self.num_pages: int = 0
         self.report_year: int = 2023  # Dynamically updated
         self._load_document()
@@ -56,8 +57,14 @@ class PDFProcessor:
                 ocr_text = self.ocr_processor.ocr_page(self.pdf_path, page_num)
                 if len(ocr_text.strip()) > len(extracted):
                     extracted = ocr_text.strip()
+                    self.ocr_pages.add(page_num)
 
             self.pages_text[page_num] = extracted
+
+    def is_ocr_page(self, page_num: Optional[int]) -> bool:
+        if page_num is None:
+            return False
+        return page_num in self.ocr_pages
 
     def get_page_text(self, page_num: int) -> str:
         """Returns normalized text for a 1-based page number."""

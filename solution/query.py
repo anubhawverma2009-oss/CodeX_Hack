@@ -26,7 +26,7 @@ def main():
 
     proc = PDFProcessor(pdf_path=args.pdf, enable_ocr=not args.no_ocr)
     tables = TableExtractor(proc.get_all_pages(), default_year=proc.report_year)
-    extractor = AnswerExtractor(tables, proc.get_all_pages(), default_year=proc.report_year)
+    extractor = AnswerExtractor(tables, proc.get_all_pages(), default_year=proc.report_year, pdf_processor=proc)
     
     res = extractor.extract_answer({"id": args.id, "question": args.question})
     analysis = QueryAnalysis(args.question, default_year=proc.report_year)

@@ -52,7 +52,7 @@ def run_pipeline(pdf_path: str, questions_path: str, output_path: str, eval_mode
 
     # 3. Answer questions
     print("[3/4] Processing queries and extracting answers...")
-    answer_extractor = AnswerExtractor(table_extractor, pages_text, default_year=report_year)
+    answer_extractor = AnswerExtractor(table_extractor, pages_text, default_year=report_year, pdf_processor=pdf_proc)
 
     questions = []
     with open(questions_path, "r", encoding="utf-8") as f:

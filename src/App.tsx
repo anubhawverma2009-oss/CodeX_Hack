@@ -14,6 +14,9 @@ import {
   RefreshCw,
   ExternalLink,
   ChevronRight,
+  ChevronDown,
+  ChevronUp,
+  HelpCircle,
   Sparkles,
   BarChart3,
   Database,
@@ -50,6 +53,22 @@ interface BenchmarkData {
   items: BenchmarkItem[];
 }
 
+export interface QueryTrace {
+  entity_type: string;
+  metric: string;
+  year: number;
+  is_unanswerable: boolean;
+  retrieved_page: number | null;
+  table_title: string;
+  retrieval_method: string;
+  matched_row: string;
+  matched_col: string;
+  evidence_text: string;
+  confidence_score: number;
+  confidence_basis: string;
+  ocr_used: boolean;
+}
+
 interface QueryResult {
   id: string;
   answer: string;
@@ -62,6 +81,7 @@ interface QueryResult {
     is_unanswerable: boolean;
   };
   page_snippet?: string;
+  trace?: QueryTrace;
 }
 
 interface ActivePdfInfo {
@@ -81,6 +101,7 @@ export default function App() {
   );
   const [isQuerying, setIsQuerying] = useState<boolean>(false);
   const [queryResult, setQueryResult] = useState<QueryResult | null>(null); // Task 2: No hardcoded demo answer
+  const [isTraceOpen, setIsTraceOpen] = useState<boolean>(true);
 
   // Active PDF state
   const [activePdf, setActivePdf] = useState<ActivePdfInfo>({
@@ -464,6 +485,36 @@ export default function App() {
               )}
 
               <div className="pt-4">
+                {/* How to ask questions hint box */}
+                <div className="mb-4 p-3.5 bg-slate-950/80 border border-indigo-500/25 rounded-xl">
+                  <div className="flex items-center gap-2 text-xs font-semibold text-indigo-300 mb-1.5">
+                    <HelpCircle className="w-4 h-4 text-indigo-400 shrink-0" />
+                    <span>How to ask questions:</span>
+                  </div>
+                  <p className="text-[11px] text-slate-400 mb-2.5">
+                    Ask natural-language questions specifying entity/location, metric, and year. Click an example below to try:
+                  </p>
+                  <div className="flex flex-wrap gap-1.5">
+                    {[
+                      "What was the number of road accident deaths in Pune in 2023?",
+                      "How many road accidents were reported in Rajasthan in 2022?",
+                      "What was the total number of fatalities in India in 2023?",
+                    ].map((ex, i) => (
+                      <button
+                        key={i}
+                        onClick={() => {
+                          setQuestionInput(ex);
+                          handleRunQuery(ex);
+                        }}
+                        className="text-xs px-2.5 py-1 bg-indigo-500/10 hover:bg-indigo-500/20 border border-indigo-500/30 text-indigo-200 rounded-lg transition text-left flex items-center gap-1.5"
+                      >
+                        <Sparkles className="w-3 h-3 text-amber-400 shrink-0" />
+                        <span>{ex}</span>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
                 <div className="flex items-center justify-between mb-2">
                   <label className="text-xs font-semibold text-slate-300 flex items-center gap-1.5">
                     <Search className="w-3.5 h-3.5 text-indigo-400" />
@@ -487,7 +538,7 @@ export default function App() {
                   <button
                     onClick={() => handleRunQuery()}
                     disabled={isQuerying || !activePdf.isReady || isUploading}
-                    className="px-5 py-2.5 bg-indigo-600 hover:bg-indigo-500 disabled:bg-slate-800 text-white text-sm font-medium rounded-xl transition flex items-center gap-2 shadow-lg shadow-indigo-600/20"
+                    className="px-5 py-2.5 bg-indigo-600 hover:bg-indigo-500 disabled:bg-slate-800 text-white text-sm font-medium rounded-xl transition flex items-center gap-2 shadow-lg shadow-indigo-600/20 shrink-0"
                   >
                     {isQuerying ? (
                       <>
@@ -506,7 +557,7 @@ export default function App() {
                 <div className="mt-3.5 pt-3 border-t border-slate-800/60">
                   <div className="text-[11px] font-medium text-slate-400 mb-2 flex items-center gap-1.5">
                     <Sparkles className="w-3 h-3 text-amber-400" />
-                    Example Questions for Quick Testing:
+                    Additional Sample Benchmark Queries:
                   </div>
                   <div className="flex flex-wrap gap-1.5">
                     {sampleQueries.map((item, idx) => (
@@ -528,106 +579,264 @@ export default function App() {
 
             {/* Answer Display or Neutral Empty State (Task 2) */}
             {queryResult ? (
-              <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-                <div className="lg:col-span-1 bg-slate-900 border border-slate-800 rounded-2xl p-5 shadow-xl flex flex-col justify-between">
-                  <div>
-                    <div className="flex items-center justify-between mb-4">
-                      <span className="text-xs font-semibold text-slate-400 uppercase tracking-wider">
-                        Prediction Result
-                      </span>
-                      <span
-                        className={`px-2.5 py-0.5 text-xs font-bold rounded-full ${
-                          queryResult.answer === "NOT_FOUND"
-                            ? "bg-amber-500/10 text-amber-400 border border-amber-500/30"
-                            : "bg-emerald-500/10 text-emerald-400 border border-emerald-500/30"
-                        }`}
-                      >
-                        {queryResult.answer === "NOT_FOUND" ? "ABSTAIN" : "EXACT MATCH"}
-                      </span>
-                    </div>
-
-                    <div className="text-xs text-slate-400 mb-1">Extracted Answer</div>
-                    <div className="font-mono text-4xl font-extrabold text-white tracking-tight mb-4">
-                      {queryResult.answer}
-                    </div>
-
-                    <div className="space-y-2.5 border-t border-slate-800 pt-3">
-                      <div className="flex items-center justify-between text-xs">
-                        <span className="text-slate-400">PDF Citation Page:</span>
-                        {queryResult.page ? (
-                          <button
-                            onClick={() => inspectPage(queryResult.page!)}
-                            className="font-mono font-bold text-indigo-400 hover:underline flex items-center gap-1"
-                          >
-                            Page {queryResult.page} of {activePdf.numPages}
-                            <ExternalLink className="w-3 h-3" />
-                          </button>
-                        ) : (
-                          <span className="text-slate-500 font-mono">null (Uncited)</span>
-                        )}
-                      </div>
-
-                      <div className="flex items-center justify-between text-xs">
-                        <span className="text-slate-400">Confidence Score:</span>
-                        <span className="font-mono font-bold text-emerald-400">
-                          {queryResult.confidence} ({Math.round(queryResult.confidence * 100)}%)
+              <div className="space-y-6">
+                <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                  <div className="lg:col-span-1 bg-slate-900 border border-slate-800 rounded-2xl p-5 shadow-xl flex flex-col justify-between">
+                    <div>
+                      <div className="flex items-center justify-between mb-4">
+                        <span className="text-xs font-semibold text-slate-400 uppercase tracking-wider">
+                          Prediction Result
+                        </span>
+                        <span
+                          className={`px-2.5 py-0.5 text-xs font-bold rounded-full ${
+                            queryResult.answer === "NOT_FOUND"
+                              ? "bg-amber-500/10 text-amber-400 border border-amber-500/30"
+                              : "bg-emerald-500/10 text-emerald-400 border border-emerald-500/30"
+                          }`}
+                        >
+                          {queryResult.answer === "NOT_FOUND" ? "ABSTAIN" : "EXACT MATCH"}
                         </span>
                       </div>
 
-                      {queryResult.query_analysis && (
-                        <>
-                          <div className="flex items-center justify-between text-xs">
-                            <span className="text-slate-400">Entity Recognized:</span>
-                            <span className="font-mono text-slate-200 capitalize">
-                              {queryResult.query_analysis.entity_type}
-                            </span>
-                          </div>
-                          <div className="flex items-center justify-between text-xs">
-                            <span className="text-slate-400">Target Metric:</span>
-                            <span className="font-mono text-slate-200 capitalize">
-                              {queryResult.query_analysis.metric}
-                            </span>
-                          </div>
-                          <div className="flex items-center justify-between text-xs">
-                            <span className="text-slate-400">Target Year:</span>
-                            <span className="font-mono text-slate-200">{queryResult.query_analysis.year}</span>
-                          </div>
-                        </>
-                      )}
+                      <div className="text-xs text-slate-400 mb-1">Extracted Answer</div>
+                      <div className="font-mono text-4xl font-extrabold text-white tracking-tight mb-4">
+                        {queryResult.answer}
+                      </div>
+
+                      <div className="space-y-2.5 border-t border-slate-800 pt-3">
+                        <div className="flex items-center justify-between text-xs">
+                          <span className="text-slate-400">PDF Citation Page:</span>
+                          {queryResult.page ? (
+                            <button
+                              onClick={() => inspectPage(queryResult.page!)}
+                              className="font-mono font-bold text-indigo-400 hover:underline flex items-center gap-1"
+                            >
+                              Page {queryResult.page} of {activePdf.numPages}
+                              <ExternalLink className="w-3 h-3" />
+                            </button>
+                          ) : (
+                            <span className="text-slate-500 font-mono">null (Uncited)</span>
+                          )}
+                        </div>
+
+                        <div className="flex items-center justify-between text-xs">
+                          <span className="text-slate-400">Confidence Score:</span>
+                          <span className="font-mono font-bold text-emerald-400">
+                            {queryResult.confidence} ({Math.round(queryResult.confidence * 100)}%)
+                          </span>
+                        </div>
+
+                        {queryResult.query_analysis && (
+                          <>
+                            <div className="flex items-center justify-between text-xs">
+                              <span className="text-slate-400">Entity Recognized:</span>
+                              <span className="font-mono text-slate-200 capitalize">
+                                {queryResult.query_analysis.entity_type}
+                              </span>
+                            </div>
+                            <div className="flex items-center justify-between text-xs">
+                              <span className="text-slate-400">Target Metric:</span>
+                              <span className="font-mono text-slate-200 capitalize">
+                                {queryResult.query_analysis.metric}
+                              </span>
+                            </div>
+                            <div className="flex items-center justify-between text-xs">
+                              <span className="text-slate-400">Target Year:</span>
+                              <span className="font-mono text-slate-200">{queryResult.query_analysis.year}</span>
+                            </div>
+                          </>
+                        )}
+                      </div>
+                    </div>
+
+                    <div className="mt-4 pt-3 border-t border-slate-800/80 text-[11px] text-slate-500">
+                      Format: Strict JSONL standard format <code className="text-indigo-400">{"{id, answer, page, confidence}"}</code>
                     </div>
                   </div>
 
-                  <div className="mt-4 pt-3 border-t border-slate-800/80 text-[11px] text-slate-500">
-                    Format: Strict JSONL standard format <code className="text-indigo-400">{"{id, answer, page, confidence}"}</code>
+                  <div className="lg:col-span-2 bg-slate-900 border border-slate-800 rounded-2xl p-5 shadow-xl flex flex-col">
+                    <div className="flex items-center justify-between mb-3">
+                      <div className="flex items-center gap-2">
+                        <BookOpen className="w-4 h-4 text-indigo-400" />
+                        <h3 className="text-sm font-semibold text-white">
+                          Document Grounding & Citation Excerpt
+                        </h3>
+                      </div>
+                      {queryResult.page && (
+                        <span className="text-xs text-slate-400">
+                          Extracted directly from Page <span className="text-white font-bold">{queryResult.page}</span>
+                        </span>
+                      )}
+                    </div>
+
+                    {queryResult.page_snippet ? (
+                      <div className="flex-1 bg-slate-950 border border-slate-800 rounded-xl p-3.5 font-mono text-xs text-slate-300 whitespace-pre-wrap overflow-x-auto leading-relaxed">
+                        {queryResult.page_snippet}
+                      </div>
+                    ) : (
+                      <div className="flex-1 bg-slate-950 border border-slate-800 rounded-xl p-8 flex flex-col items-center justify-center text-center text-slate-400">
+                        <ShieldCheck className="w-10 h-10 text-amber-400 mb-2" />
+                        <p className="text-sm font-medium text-slate-200">Abstention Validated</p>
+                        <p className="text-xs text-slate-400 max-w-sm mt-1">
+                          The requested metric or entity was not present in the statistical tables. The system correctly returns <code className="text-amber-400 font-bold">NOT_FOUND</code> without hallucinating.
+                        </p>
+                      </div>
+                    )}
                   </div>
                 </div>
 
-                <div className="lg:col-span-2 bg-slate-900 border border-slate-800 rounded-2xl p-5 shadow-xl flex flex-col">
-                  <div className="flex items-center justify-between mb-3">
-                    <div className="flex items-center gap-2">
-                      <BookOpen className="w-4 h-4 text-indigo-400" />
-                      <h3 className="text-sm font-semibold text-white">
-                        Document Grounding & Citation Excerpt
+                {/* Collapsible Section: How Was This Answer Found? */}
+                <div className="bg-slate-900 border border-slate-800 rounded-2xl shadow-xl overflow-hidden">
+                  <button
+                    onClick={() => setIsTraceOpen(!isTraceOpen)}
+                    className="w-full px-5 py-4 flex items-center justify-between bg-slate-800/40 hover:bg-slate-800/70 transition border-b border-slate-800/60"
+                  >
+                    <div className="flex items-center gap-2.5">
+                      <Cpu className="w-4 h-4 text-emerald-400" />
+                      <h3 className="text-sm font-bold text-white tracking-tight">
+                        How Was This Answer Found?
                       </h3>
-                    </div>
-                    {queryResult.page && (
-                      <span className="text-xs text-slate-400">
-                        Extracted directly from Page <span className="text-white font-bold">{queryResult.page}</span>
+                      <span className="text-[10px] font-semibold px-2 py-0.5 bg-emerald-500/10 text-emerald-400 border border-emerald-500/30 rounded-full font-mono">
+                        Transparent Pipeline Trace
                       </span>
-                    )}
-                  </div>
-
-                  {queryResult.page_snippet ? (
-                    <div className="flex-1 bg-slate-950 border border-slate-800 rounded-xl p-3.5 font-mono text-xs text-slate-300 whitespace-pre-wrap overflow-x-auto leading-relaxed">
-                      {queryResult.page_snippet}
                     </div>
-                  ) : (
-                    <div className="flex-1 bg-slate-950 border border-slate-800 rounded-xl p-8 flex flex-col items-center justify-center text-center text-slate-400">
-                      <ShieldCheck className="w-10 h-10 text-amber-400 mb-2" />
-                      <p className="text-sm font-medium text-slate-200">Abstention Validated</p>
-                      <p className="text-xs text-slate-400 max-w-sm mt-1">
-                        The requested metric or entity was not present in the statistical tables. The system correctly returns <code className="text-amber-400 font-bold">NOT_FOUND</code> without hallucinating.
-                      </p>
+                    <div className="flex items-center gap-1.5 text-xs text-slate-400">
+                      <span>{isTraceOpen ? "Hide Trace Details" : "Show Trace Details"}</span>
+                      {isTraceOpen ? <ChevronUp className="w-4 h-4 text-slate-400" /> : <ChevronDown className="w-4 h-4 text-slate-400" />}
+                    </div>
+                  </button>
+
+                  {isTraceOpen && (
+                    <div className="p-5 space-y-5">
+                      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+                        {/* 1. Question Understanding */}
+                        <div className="bg-slate-950 border border-slate-800 rounded-xl p-4 space-y-2.5">
+                          <div className="flex items-center gap-2 text-xs font-bold text-indigo-400 uppercase tracking-wider">
+                            <Search className="w-3.5 h-3.5" />
+                            1. Question Understanding
+                          </div>
+                          <div className="space-y-1.5 text-xs">
+                            <div className="flex justify-between items-center border-b border-slate-800/60 pb-1">
+                              <span className="text-slate-400">Extracted Location:</span>
+                              <span className="font-mono font-semibold text-slate-200 capitalize">
+                                {queryResult.trace?.entity_type || queryResult.query_analysis?.entity_type || "Not available"}
+                              </span>
+                            </div>
+                            <div className="flex justify-between items-center border-b border-slate-800/60 pb-1">
+                              <span className="text-slate-400">Requested Metric:</span>
+                              <span className="font-mono font-semibold text-slate-200 capitalize">
+                                {queryResult.trace?.metric || queryResult.query_analysis?.metric || "Not available"}
+                              </span>
+                            </div>
+                            <div className="flex justify-between items-center">
+                              <span className="text-slate-400">Requested Year:</span>
+                              <span className="font-mono font-semibold text-slate-200">
+                                {queryResult.trace?.year || queryResult.query_analysis?.year || "Not available"}
+                              </span>
+                            </div>
+                          </div>
+                        </div>
+
+                        {/* 2. Document Retrieval */}
+                        <div className="bg-slate-950 border border-slate-800 rounded-xl p-4 space-y-2.5">
+                          <div className="flex items-center gap-2 text-xs font-bold text-emerald-400 uppercase tracking-wider">
+                            <BookOpen className="w-3.5 h-3.5" />
+                            2. Document Retrieval
+                          </div>
+                          <div className="space-y-1.5 text-xs">
+                            <div className="flex justify-between items-center border-b border-slate-800/60 pb-1">
+                              <span className="text-slate-400">Retrieved PDF Page:</span>
+                              <span className="font-mono font-semibold text-emerald-300">
+                                {queryResult.trace?.retrieved_page ? `Page ${queryResult.trace.retrieved_page}` : "Not available"}
+                              </span>
+                            </div>
+                            <div className="flex justify-between items-center border-b border-slate-800/60 pb-1">
+                              <span className="text-slate-400">Matched Table:</span>
+                              <span className="font-mono font-semibold text-slate-200 truncate max-w-[130px]" title={queryResult.trace?.table_title || "Not available"}>
+                                {queryResult.trace?.table_title || "Not available"}
+                              </span>
+                            </div>
+                            <div className="flex justify-between items-center">
+                              <span className="text-slate-400">Retrieval Method:</span>
+                              <span className="font-mono font-semibold text-slate-200 text-[11px]">
+                                {queryResult.trace?.retrieval_method || "Not available"}
+                              </span>
+                            </div>
+                          </div>
+                        </div>
+
+                        {/* 3. Answer Extraction */}
+                        <div className="bg-slate-950 border border-slate-800 rounded-xl p-4 space-y-2.5">
+                          <div className="flex items-center gap-2 text-xs font-bold text-amber-400 uppercase tracking-wider">
+                            <Layers className="w-3.5 h-3.5" />
+                            3. Answer Extraction
+                          </div>
+                          <div className="space-y-1.5 text-xs">
+                            <div className="flex justify-between items-center border-b border-slate-800/60 pb-1">
+                              <span className="text-slate-400">Matched Row:</span>
+                              <span className="font-mono font-semibold text-slate-200 truncate max-w-[130px]" title={queryResult.trace?.matched_row || "Not available"}>
+                                {queryResult.trace?.matched_row || "Not available"}
+                              </span>
+                            </div>
+                            <div className="flex justify-between items-center border-b border-slate-800/60 pb-1">
+                              <span className="text-slate-400">Matched Column:</span>
+                              <span className="font-mono font-semibold text-slate-200 truncate max-w-[130px]" title={queryResult.trace?.matched_col || "Not available"}>
+                                {queryResult.trace?.matched_col || "Not available"}
+                              </span>
+                            </div>
+                            <div className="flex justify-between items-center">
+                              <span className="text-slate-400">Extracted Value:</span>
+                              <span className="font-mono font-bold text-amber-400">
+                                {queryResult.answer || "Not available"}
+                              </span>
+                            </div>
+                          </div>
+                        </div>
+
+                        {/* 4. Verification */}
+                        <div className="bg-slate-950 border border-slate-800 rounded-xl p-4 space-y-2.5">
+                          <div className="flex items-center gap-2 text-xs font-bold text-purple-400 uppercase tracking-wider">
+                            <ShieldCheck className="w-3.5 h-3.5" />
+                            4. Verification & OCR
+                          </div>
+                          <div className="space-y-1.5 text-xs">
+                            <div className="flex justify-between items-center border-b border-slate-800/60 pb-1">
+                              <span className="text-slate-400">Citation Page:</span>
+                              <span className="font-mono font-semibold text-purple-300">
+                                {queryResult.page ? `Page ${queryResult.page}` : "null (Uncited)"}
+                              </span>
+                            </div>
+                            <div className="flex justify-between items-center border-b border-slate-800/60 pb-1">
+                              <span className="text-slate-400">Confidence Basis:</span>
+                              <span className="font-mono font-semibold text-slate-200 text-[10px] truncate max-w-[120px]" title={queryResult.trace?.confidence_basis || "Not available"}>
+                                {queryResult.trace?.confidence_basis || "Not available"}
+                              </span>
+                            </div>
+                            <div className="flex justify-between items-center">
+                              <span className="text-slate-400">OCR Executed:</span>
+                              <span className={`font-mono font-semibold text-[11px] ${queryResult.trace?.ocr_used ? "text-emerald-400" : "text-slate-400"}`}>
+                                {queryResult.trace?.ocr_used !== undefined ? (queryResult.trace.ocr_used ? "Yes (OCR Active)" : "No (PDF Text)") : "Not available"}
+                              </span>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Raw Evidence Text Box */}
+                      <div className="bg-slate-950 border border-slate-800 rounded-xl p-4 space-y-2">
+                        <div className="flex items-center justify-between text-xs">
+                          <span className="font-semibold text-slate-300 flex items-center gap-1.5">
+                            <FileSpreadsheet className="w-3.5 h-3.5 text-indigo-400" />
+                            Grounding Evidence Text (Source PDF Page Line):
+                          </span>
+                          <span className="text-[11px] text-slate-500 font-mono">
+                            Direct unedited PDF page content
+                          </span>
+                        </div>
+                        <div className="p-3 bg-slate-900 border border-slate-800/80 rounded-lg font-mono text-xs text-slate-300 whitespace-pre-wrap leading-relaxed">
+                          {queryResult.trace?.evidence_text || queryResult.page_snippet || "Not available"}
+                        </div>
+                      </div>
                     </div>
                   )}
                 </div>

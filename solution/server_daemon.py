@@ -40,7 +40,7 @@ class DaemonEngine:
             self.num_pages = self.processor.num_pages
             self.report_year = self.processor.report_year
             self.table_extractor = TableExtractor(pages_text, default_year=self.report_year)
-            self.answer_extractor = AnswerExtractor(self.table_extractor, pages_text, default_year=self.report_year)
+            self.answer_extractor = AnswerExtractor(self.table_extractor, pages_text, default_year=self.report_year, pdf_processor=self.processor)
             self.active_pdf_path = abs_path
 
             ocr_status = "active" if self.processor.ocr_processor.is_available() else "unavailable (tesseract/poppler not found)"
