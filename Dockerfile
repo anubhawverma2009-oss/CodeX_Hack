@@ -23,14 +23,14 @@ RUN python3 -m venv /opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
 
 # Copy package manifests first for build caching
-COPY package.json package-lock.json* ./
+COPY package.json package-lock.json ./
 COPY solution/requirements.txt ./solution/requirements.txt
 
 # Install Python requirements in virtual environment
 RUN pip install --no-cache-dir -r solution/requirements.txt
 
-# Install Node dependencies
-RUN npm ci || npm install
+# Install Node dependencies (including devDependencies required for vite build)
+RUN npm ci
 
 # Copy application source code
 COPY . .
