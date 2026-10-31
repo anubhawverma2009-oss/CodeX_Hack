@@ -1,7 +1,7 @@
 """
 PDF Processor for P5 - Report Navigator.
-Handles runtime PDF ingestion, page-by-page text extraction, normalization,
-dynamic report year detection, and OCR fallback for scanned pages.
+Handles runtime PDF ingestion, fast page-by-page text extraction, normalization,
+dynamic report year detection, and lazy on-demand OCR fallback for scanned pages.
 """
 import os
 import re
@@ -46,20 +46,11 @@ class PDFProcessor:
             if all_years:
                 self.report_year = max(int(y) for y in all_years)
 
+        # FAST INGESTION: Extract raw text instantly without upfront blocking OCR batching
         for idx, page in enumerate(reader.pages):
             page_num = idx + 1
             extracted = page.extract_text() or ""
-            extracted = extracted.strip()
-
-            # Check if page text is essentially empty (scanned image page)
-            if len(extracted) < 30 and self.enable_ocr and self.ocr_processor.is_available():
-                logger.info(f"Page {page_num} has sparse text ({len(extracted)} chars). Running OCR...")
-                ocr_text = self.ocr_processor.ocr_page(self.pdf_path, page_num)
-                if len(ocr_text.strip()) > len(extracted):
-                    extracted = ocr_text.strip()
-                    self.ocr_pages.add(page_num)
-
-            self.pages_text[page_num] = extracted
+            self.pages_text[page_num] = extracted.strip()
 
     def is_ocr_page(self, page_num: Optional[int]) -> bool:
         if page_num is None:
@@ -67,10 +58,22 @@ class PDFProcessor:
         return page_num in self.ocr_pages
 
     def get_page_text(self, page_num: int) -> str:
-        """Returns normalized text for a 1-based page number."""
-        return self.pages_text.get(page_num, "")
+        """Returns normalized text for a 1-based page number, running lazy on-demand OCR if sparse."""
+        text = self.pages_text.get(page_num, "")
+        if len(text.strip()) < 30 and self.enable_ocr and self.ocr_processor.is_available() and page_num not in self.ocr_pages:
+            logger.info(f"Lazy OCR triggered for sparse page {page_num} ({len(text.strip())} chars)...")
+            ocr_text = self.ocr_processor.ocr_page(self.pdf_path, page_num)
+            if len(ocr_text.strip()) > len(text.strip()):
+                text = ocr_text.strip()
+                self.pages_text[page_num] = text
+                self.ocr_pages.add(page_num)
+        return text
 
     def get_all_pages(self) -> Dict[int, str]:
+        """Returns all pages, triggering lazy OCR for sparse pages if accessed."""
+        for p in range(1, self.num_pages + 1):
+            if len(self.pages_text.get(p, "")) < 30:
+                self.get_page_text(p)
         return self.pages_text
 
     @staticmethod

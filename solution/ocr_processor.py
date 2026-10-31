@@ -1,7 +1,7 @@
 """
 OCR Processor for P5 - Report Navigator.
 Provides optical character recognition fallback for scanned PDF pages
-using poppler (pdf2image) and pytesseract.
+using poppler (pdf2image) and pytesseract with memory optimization.
 """
 import os
 import logging
@@ -27,7 +27,8 @@ class OCRProcessor:
 
     def ocr_page(self, pdf_path: str, page_number_1based: int) -> str:
         """
-        Renders a single PDF page to an image and runs OCR via Tesseract.
+        Renders a single PDF page to an image at optimized 150 DPI and runs OCR via Tesseract.
+        Releases image resources promptly.
         """
         if not OCR_AVAILABLE:
             logger.warning("OCR tools not available in environment.")
@@ -37,13 +38,14 @@ class OCRProcessor:
         if cache_key in self._cache:
             return self._cache[cache_key]
 
+        images = []
         try:
-            # Convert only the single target page
+            # Convert single target page at memory-optimized 150 DPI
             images = convert_from_path(
                 pdf_path,
                 first_page=page_number_1based,
                 last_page=page_number_1based,
-                dpi=200
+                dpi=150
             )
             if not images:
                 return ""
@@ -54,3 +56,9 @@ class OCRProcessor:
         except Exception as e:
             logger.error(f"Error during OCR of page {page_number_1based}: {e}")
             return ""
+        finally:
+            for img in images:
+                try:
+                    img.close()
+                except Exception:
+                    pass

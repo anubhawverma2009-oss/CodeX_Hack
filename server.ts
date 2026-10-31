@@ -13,7 +13,8 @@ const DEFAULT_PDF_PATH = path.resolve(".", "public", "assets", "aistudio", "repo
 
 class PythonBridge {
   private daemon: ChildProcess | null = null;
-  private pendingCallbacks: Array<(data: any) => void> = [];
+  private pendingCallbacks: Map<string, { resolve: (data: any) => void; reject: (err: any) => void; timer: NodeJS.Timeout }> = new Map();
+  private reqCounter = 0;
   public activePdfPath: string = DEFAULT_PDF_PATH;
   public activeFilename: string = "report_A.pdf (Default Report)";
   public numPages: number = 272;
@@ -31,6 +32,13 @@ class PythonBridge {
         this.daemon.kill();
       } catch (e) {}
     }
+
+    // Reject all existing pending callbacks
+    for (const [reqId, cb] of this.pendingCallbacks.entries()) {
+      clearTimeout(cb.timer);
+      cb.reject(new Error("Python daemon restarted"));
+    }
+    this.pendingCallbacks.clear();
 
     try {
       this.daemon = spawn("python3", ["solution/server_daemon.py"], {
@@ -52,8 +60,22 @@ class PythonBridge {
           if (!line.trim()) continue;
           try {
             const parsed = JSON.parse(line.trim());
-            const cb = this.pendingCallbacks.shift();
-            if (cb) cb(parsed);
+            const reqId = parsed.req_id;
+            if (reqId !== undefined && this.pendingCallbacks.has(reqId)) {
+              const cb = this.pendingCallbacks.get(reqId)!;
+              clearTimeout(cb.timer);
+              this.pendingCallbacks.delete(reqId);
+              cb.resolve(parsed);
+            } else {
+              // Fallback for status or untracked messages
+              const firstKey = this.pendingCallbacks.keys().next().value;
+              if (firstKey !== undefined) {
+                const cb = this.pendingCallbacks.get(firstKey)!;
+                clearTimeout(cb.timer);
+                this.pendingCallbacks.delete(firstKey);
+                cb.resolve(parsed);
+              }
+            }
           } catch (err) {
             console.error("Failed to parse daemon response:", line, err);
           }
@@ -63,64 +85,80 @@ class PythonBridge {
       this.daemon.on("close", (code) => {
         console.warn(`Python daemon exited with code ${code}. Restarting...`);
         this.isReady = false;
+        for (const [reqId, cb] of this.pendingCallbacks.entries()) {
+          clearTimeout(cb.timer);
+          cb.reject(new Error(`Python daemon closed with code ${code}`));
+        }
+        this.pendingCallbacks.clear();
         setTimeout(() => this.startDaemon(), 1000);
       });
 
       setTimeout(() => {
-        this.sendCommand({ action: "status" }, (res) => {
+        this.sendCommand({ action: "status" }, 15000).then((res) => {
           if (res.status === "ok") {
             this.numPages = res.num_pages || 272;
             this.reportYear = res.report_year || 2023;
             this.isReady = true;
             console.log(`Python Daemon ready. Pages: ${this.numPages}, Year: ${this.reportYear}`);
           }
-        });
-      }, 1500);
+        }).catch((e) => console.error("Daemon status check failed:", e));
+      }, 500);
     } catch (err: any) {
       console.error("Error creating Python daemon process:", err);
       this.isReady = false;
     }
   }
 
-  public sendCommand(cmd: any, callback: (data: any) => void) {
-    if (!this.daemon || !this.daemon.stdin || !this.daemon.stdin.writable) {
-      callback({ status: "error", message: "Daemon not writable" });
-      return;
-    }
-    this.pendingCallbacks.push(callback);
-    this.daemon.stdin.write(JSON.stringify(cmd) + "\n");
-  }
-
-  public loadPdf(pdfPath: string, filename: string): Promise<any> {
+  public sendCommand(cmd: any, timeoutMs: number = 45000): Promise<any> {
     return new Promise((resolve) => {
-      this.sendCommand({ action: "load_pdf", pdf_path: pdfPath }, (res) => {
-        if (res.status === "ok") {
-          this.activePdfPath = pdfPath;
-          this.activeFilename = filename;
-          this.numPages = res.num_pages;
-          this.reportYear = res.report_year;
-          this.ocrStatus = res.ocr_status || "active";
-          this.isReady = true;
+      if (!this.daemon || !this.daemon.stdin || !this.daemon.stdin.writable) {
+        return resolve({ status: "error", message: "Daemon not writable" });
+      }
+      const reqId = `req_${++this.reqCounter}`;
+      cmd.req_id = reqId;
+
+      const timer = setTimeout(() => {
+        if (this.pendingCallbacks.has(reqId)) {
+          this.pendingCallbacks.delete(reqId);
+          resolve({ status: "error", message: "Python daemon request timeout (45s)" });
         }
-        resolve(res);
+      }, timeoutMs);
+
+      this.pendingCallbacks.set(reqId, {
+        resolve,
+        reject: (err) => resolve({ status: "error", message: err.message }),
+        timer,
       });
+
+      try {
+        this.daemon.stdin.write(JSON.stringify(cmd) + "\n");
+      } catch (err: any) {
+        clearTimeout(timer);
+        this.pendingCallbacks.delete(reqId);
+        resolve({ status: "error", message: err.message || "Failed to write to daemon stdin" });
+      }
     });
   }
 
-  public query(question: string, id: string = "custom"): Promise<any> {
-    return new Promise((resolve) => {
-      this.sendCommand({ action: "query", question, id }, (res) => {
-        resolve(res);
-      });
-    });
+  public async loadPdf(pdfPath: string, filename: string): Promise<any> {
+    const res = await this.sendCommand({ action: "load_pdf", pdf_path: pdfPath }, 60000);
+    if (res.status === "ok") {
+      this.activePdfPath = pdfPath;
+      this.activeFilename = filename;
+      this.numPages = res.num_pages;
+      this.reportYear = res.report_year;
+      this.ocrStatus = res.ocr_status || "active";
+      this.isReady = true;
+    }
+    return res;
   }
 
-  public getPage(pageNum: number): Promise<any> {
-    return new Promise((resolve) => {
-      this.sendCommand({ action: "get_page", page: pageNum }, (res) => {
-        resolve(res);
-      });
-    });
+  public async query(question: string, id: string = "custom"): Promise<any> {
+    return await this.sendCommand({ action: "query", question, id }, 45000);
+  }
+
+  public async getPage(pageNum: number): Promise<any> {
+    return await this.sendCommand({ action: "get_page", page: pageNum }, 20000);
   }
 }
 

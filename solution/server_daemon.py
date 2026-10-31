@@ -2,7 +2,7 @@
 """
 Server Daemon for P5 - Report Navigator.
 Keeps the active PDF index in-memory for sub-second web queries and page inspection.
-Communicates via JSON-RPC lines on stdin/stdout.
+Communicates via JSON-RPC lines on stdin/stdout with request ID tracking.
 """
 import sys
 import os
@@ -34,7 +34,7 @@ class DaemonEngine:
             if not os.path.exists(abs_path):
                 return {"status": "error", "message": f"File not found: {abs_path}"}
 
-            logger.info(f"Loading PDF with OCR enabled: {abs_path}")
+            logger.info(f"Loading PDF (lazy OCR enabled): {abs_path}")
             self.processor = PDFProcessor(pdf_path=abs_path, enable_ocr=enable_ocr)
             pages_text = self.processor.get_all_pages()
             self.num_pages = self.processor.num_pages
@@ -116,9 +116,11 @@ def main():
         line = line.strip()
         if not line:
             continue
+        req_id = None
         try:
             msg = json.loads(line)
             action = msg.get("action")
+            req_id = msg.get("req_id")
             if action == "load_pdf":
                 res = engine.load_pdf(msg.get("pdf_path", ""), enable_ocr=True)
             elif action == "query":
@@ -134,9 +136,15 @@ def main():
                 }
             else:
                 res = {"status": "error", "message": f"Unknown action: {action}"}
+            
+            if req_id is not None:
+                res["req_id"] = req_id
             print(json.dumps(res), flush=True)
         except Exception as e:
-            print(json.dumps({"status": "error", "message": str(e)}), flush=True)
+            err_res = {"status": "error", "message": str(e)}
+            if req_id is not None:
+                err_res["req_id"] = req_id
+            print(json.dumps(err_res), flush=True)
 
 if __name__ == "__main__":
     main()
