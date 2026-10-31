@@ -23,6 +23,7 @@ import {
   FileCheck,
   FileX,
   FileSpreadsheet,
+  Info,
 } from "lucide-react";
 
 interface BenchmarkItem {
@@ -44,6 +45,8 @@ interface BenchmarkData {
   exactMatchPct: string;
   pageMatchCount: number;
   pageMatchPct: string;
+  source: string;
+  isPrecomputed: boolean;
   items: BenchmarkItem[];
 }
 
@@ -66,6 +69,7 @@ interface ActivePdfInfo {
   path: string;
   numPages: number;
   reportYear: number;
+  ocrStatus: string;
   isDefault: boolean;
   isReady: boolean;
 }
@@ -76,20 +80,7 @@ export default function App() {
     "What was the number of road accident deaths in Pune city in 2023?"
   );
   const [isQuerying, setIsQuerying] = useState<boolean>(false);
-  const [queryResult, setQueryResult] = useState<QueryResult | null>({
-    id: "P000",
-    answer: "351",
-    page: 101,
-    confidence: 0.98,
-    query_analysis: {
-      entity_type: "city",
-      metric: "killed",
-      year: 2023,
-      is_unanswerable: false,
-    },
-    page_snippet:
-      "2022 2023 2022 2023 2022 2023 2022 2023 2022 2023 2022 2023\n1 Agra 1,029 1,007 28 29 548 499 9 11 795 657 29 31\n2 Ahmedabad 1,711 1,767 19 19 488 535 11 8 1,305 1,347 21 21\n3 Allahabad (Prayagraj) 1,370 1,297 24 24 603 582 6 5 886 865 28 28\n39 Pune 871 1,230 31 26 325 351 22 18 608 881 32 27",
-  });
+  const [queryResult, setQueryResult] = useState<QueryResult | null>(null); // Task 2: No hardcoded demo answer
 
   // Active PDF state
   const [activePdf, setActivePdf] = useState<ActivePdfInfo>({
@@ -97,6 +88,7 @@ export default function App() {
     path: "public/assets/aistudio/report_A_90150542.pdf",
     numPages: 272,
     reportYear: 2023,
+    ocrStatus: "active",
     isDefault: true,
     isReady: true,
   });
@@ -179,11 +171,11 @@ export default function App() {
         path: `uploads/${data.filename}`,
         numPages: data.numPages,
         reportYear: data.reportYear,
+        ocrStatus: data.ocrStatus || "active",
         isDefault: false,
         isReady: true,
       });
 
-      // Clear previous query
       setQueryResult(null);
     } catch (err: any) {
       console.error(err);
@@ -208,9 +200,11 @@ export default function App() {
           path: "public/assets/aistudio/report_A_90150542.pdf",
           numPages: data.numPages,
           reportYear: data.reportYear,
+          ocrStatus: data.ocrStatus || "active",
           isDefault: true,
           isReady: true,
         });
+        setQueryResult(null);
       }
     } catch (e) {
       console.error(e);
@@ -298,7 +292,7 @@ export default function App() {
                   100% CPU Offline
                 </span>
                 <span className="px-2 py-0.5 text-[10px] font-semibold bg-indigo-500/10 text-indigo-300 border border-indigo-500/30 rounded-full font-mono">
-                  v2.0 Dynamic Engine
+                  v2.0 OCR-Enabled
                 </span>
               </div>
               <p className="text-xs text-slate-400">
@@ -307,7 +301,6 @@ export default function App() {
             </div>
           </div>
 
-          {/* Action Downloads */}
           <div className="flex items-center gap-2">
             <a
               href="/downloads/report_navigator_solution.zip"
@@ -351,7 +344,7 @@ export default function App() {
               }`}
             >
               <BarChart3 className="w-3.5 h-3.5 text-emerald-400" />
-              Practice Benchmark (50/50 Scorecard)
+              Practice Benchmark (Scorecard)
             </button>
             <button
               onClick={() => setActiveTab("architecture")}
@@ -384,7 +377,6 @@ export default function App() {
         {/* TAB 1: PLAYGROUND */}
         {activeTab === "playground" && (
           <div className="space-y-6">
-            {/* Active Document & Upload Section */}
             <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 shadow-xl">
               <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 pb-4 border-b border-slate-800/80">
                 <div className="flex items-start gap-3">
@@ -405,28 +397,26 @@ export default function App() {
                         </span>
                       ) : (
                         <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/30 font-medium flex items-center gap-1">
-                          <CheckCircle2 className="w-3 h-3" /> User Uploaded
+                          <CheckCircle2 className="w-3 h-3" /> User Uploaded (OCR Enabled)
                         </span>
                       )}
                     </div>
                     <div className="flex items-center gap-3 mt-1.5 text-xs text-slate-400 flex-wrap">
                       <span>
-                        Document Pages: <strong className="text-slate-200 font-mono">{activePdf.numPages}</strong>
+                        Pages: <strong className="text-slate-200 font-mono">{activePdf.numPages}</strong>
                       </span>
                       <span>•</span>
                       <span>
-                        Report Year: <strong className="text-slate-200 font-mono">{activePdf.reportYear}</strong>
+                        Year: <strong className="text-slate-200 font-mono">{activePdf.reportYear}</strong>
                       </span>
                       <span>•</span>
-                      <span className="flex items-center gap-1 text-emerald-400">
-                        <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
-                        In-Memory Index Ready
+                      <span>
+                        OCR Pipeline: <strong className="text-emerald-400 font-mono">{activePdf.ocrStatus}</strong>
                       </span>
                     </div>
                   </div>
                 </div>
 
-                {/* Upload & Reset Buttons */}
                 <div className="flex items-center gap-2 shrink-0">
                   <input
                     type="file"
@@ -443,7 +433,7 @@ export default function App() {
                     {isUploading ? (
                       <>
                         <RefreshCw className="w-3.5 h-3.5 animate-spin" />
-                        Indexing PDF...
+                        Processing PDF & OCR...
                       </>
                     ) : (
                       <>
@@ -458,7 +448,6 @@ export default function App() {
                       onClick={handleResetToDefault}
                       disabled={isUploading}
                       className="px-3 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-medium rounded-xl border border-slate-700 transition flex items-center gap-1.5"
-                      title="Reset to default report"
                     >
                       <RotateCcw className="w-3.5 h-3.5" />
                       Reset to Practice PDF
@@ -467,7 +456,6 @@ export default function App() {
                 </div>
               </div>
 
-              {/* Upload Error Banner */}
               {uploadError && (
                 <div className="mt-3 p-3 bg-rose-500/10 border border-rose-500/30 rounded-xl text-rose-300 text-xs flex items-center gap-2">
                   <FileX className="w-4 h-4 text-rose-400 shrink-0" />
@@ -475,7 +463,6 @@ export default function App() {
                 </div>
               )}
 
-              {/* Question Input Section */}
               <div className="pt-4">
                 <div className="flex items-center justify-between mb-2">
                   <label className="text-xs font-semibold text-slate-300 flex items-center gap-1.5">
@@ -483,7 +470,7 @@ export default function App() {
                     Query the active document:
                   </label>
                   <span className="text-[11px] text-slate-500 font-mono">
-                    Dynamic extraction (No cached text)
+                    Live inference (No precomputed answers)
                   </span>
                 </div>
 
@@ -516,7 +503,6 @@ export default function App() {
                   </button>
                 </div>
 
-                {/* Sample Pills */}
                 <div className="mt-3.5 pt-3 border-t border-slate-800/60">
                   <div className="text-[11px] font-medium text-slate-400 mb-2 flex items-center gap-1.5">
                     <Sparkles className="w-3 h-3 text-amber-400" />
@@ -540,10 +526,9 @@ export default function App() {
               </div>
             </div>
 
-            {/* Answer Display */}
-            {queryResult && (
+            {/* Answer Display or Neutral Empty State (Task 2) */}
+            {queryResult ? (
               <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-                {/* Result Card */}
                 <div className="lg:col-span-1 bg-slate-900 border border-slate-800 rounded-2xl p-5 shadow-xl flex flex-col justify-between">
                   <div>
                     <div className="flex items-center justify-between mb-4">
@@ -617,7 +602,6 @@ export default function App() {
                   </div>
                 </div>
 
-                {/* Document Evidence / Snippet Card */}
                 <div className="lg:col-span-2 bg-slate-900 border border-slate-800 rounded-2xl p-5 shadow-xl flex flex-col">
                   <div className="flex items-center justify-between mb-3">
                     <div className="flex items-center gap-2">
@@ -648,6 +632,15 @@ export default function App() {
                   )}
                 </div>
               </div>
+            ) : (
+              // Neutral empty state (Task 2)
+              <div className="bg-slate-900 border border-slate-800 rounded-2xl p-8 text-center text-slate-400 flex flex-col items-center justify-center space-y-3 shadow-xl">
+                <Info className="w-10 h-10 text-indigo-400" />
+                <h3 className="text-sm font-semibold text-white">Ready for Live Inference</h3>
+                <p className="text-xs text-slate-400 max-w-md">
+                  Enter a question above or click one of the quick test examples to run real-time deterministic extraction against the active PDF report.
+                </p>
+              </div>
             )}
           </div>
         )}
@@ -655,6 +648,19 @@ export default function App() {
         {/* TAB 2: BENCHMARK */}
         {activeTab === "benchmark" && (
           <div className="space-y-6">
+            {/* Transparency Banner (Task 3) */}
+            <div className="bg-indigo-950/40 border border-indigo-500/30 rounded-2xl p-4 flex items-center justify-between gap-4 text-xs">
+              <div className="flex items-center gap-2.5 text-indigo-200">
+                <Database className="w-4 h-4 text-indigo-400 shrink-0" />
+                <span>
+                  <strong>Benchmark Transparency:</strong> Results below are loaded from the precomputed practice dataset (<code className="text-indigo-300 font-mono">predictions.jsonl</code>) tested against <code className="text-indigo-300 font-mono">questions_with_answers.jsonl</code>.
+                </span>
+              </div>
+              <span className="px-2.5 py-1 bg-indigo-500/20 text-indigo-300 rounded-lg font-mono text-[11px] font-semibold shrink-0 border border-indigo-500/30">
+                Precomputed Benchmark
+              </span>
+            </div>
+
             {/* KPI Banner */}
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
               <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 shadow-lg">
@@ -698,7 +704,7 @@ export default function App() {
                   <Cpu className="w-4 h-4 text-purple-400" />
                 </div>
                 <div className="mt-2 text-3xl font-extrabold text-purple-400">~410 ms</div>
-                <div className="text-[11px] text-slate-400 mt-1">Entire 272-page index in &lt;21s</div>
+                <div className="text-[11px] text-slate-400 mt-1">Entire 272-page index in &lt;22s</div>
               </div>
             </div>
 
@@ -754,7 +760,6 @@ export default function App() {
                 </div>
               </div>
 
-              {/* Table */}
               <div className="overflow-x-auto border border-slate-800 rounded-xl">
                 <table className="w-full text-left border-collapse text-xs">
                   <thead>
@@ -848,7 +853,6 @@ export default function App() {
               </p>
 
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
-                {/* Phase 1 */}
                 <div className="bg-slate-950 border border-slate-800 rounded-xl p-4 flex flex-col justify-between">
                   <div>
                     <div className="flex items-center justify-between mb-2">
@@ -857,17 +861,16 @@ export default function App() {
                       </span>
                       <span className="text-xs text-slate-500 font-mono">pdf_processor.py</span>
                     </div>
-                    <h4 className="text-sm font-semibold text-white mb-1.5">Runtime Ingestion & Dynamic Year</h4>
+                    <h4 className="text-sm font-semibold text-white mb-1.5">Runtime Ingestion & OCR Fallback</h4>
                     <p className="text-xs text-slate-400 leading-relaxed">
-                      Reads the active PDF directly from disk into RAM. Dynamically extracts the publication year from title pages and activates Tesseract OCR if pages are scanned.
+                      Reads the active PDF directly from disk into RAM. Automatically triggers Tesseract OCR if pages contain fewer than 30 characters (scanned image pages).
                     </p>
                   </div>
                   <div className="mt-3 text-[11px] text-emerald-400 font-mono">
-                    ✓ No disk cache dependencies
+                    ✓ Poppler & Tesseract integration
                   </div>
                 </div>
 
-                {/* Phase 2 */}
                 <div className="bg-slate-950 border border-slate-800 rounded-xl p-4 flex flex-col justify-between">
                   <div>
                     <div className="flex items-center justify-between mb-2">
@@ -878,7 +881,7 @@ export default function App() {
                     </div>
                     <h4 className="text-sm font-semibold text-white mb-1.5">Dynamic Header & Column Parser</h4>
                     <p className="text-xs text-slate-400 leading-relaxed">
-                      Parses comparison years directly from table headers (e.g. 2022 vs 2023). Maps each data column to its target year and ignores continuation/concluded pages.
+                      Parses comparison years directly from table headers and maps columns dynamically, supporting multi-year historical data across report families.
                     </p>
                   </div>
                   <div className="mt-3 text-[11px] text-emerald-400 font-mono">
@@ -886,7 +889,6 @@ export default function App() {
                   </div>
                 </div>
 
-                {/* Phase 3 */}
                 <div className="bg-slate-950 border border-slate-800 rounded-xl p-4 flex flex-col justify-between">
                   <div>
                     <div className="flex items-center justify-between mb-2">
@@ -897,7 +899,7 @@ export default function App() {
                     </div>
                     <h4 className="text-sm font-semibold text-white mb-1.5">Document Evidence Verification</h4>
                     <p className="text-xs text-slate-400 leading-relaxed">
-                      Verifies whether the question's content nouns exist in the document text. Uses word-boundary matching with domain stopword filtering to eliminate false substring collisions (e.g. Agra inside Prayagraj).
+                      Verifies whether the question's content nouns exist in the document text using word-boundary matching with domain stopword filtering.
                     </p>
                   </div>
                   <div className="mt-3 text-[11px] text-emerald-400 font-mono">
@@ -905,7 +907,6 @@ export default function App() {
                   </div>
                 </div>
 
-                {/* Phase 4 */}
                 <div className="bg-slate-950 border border-slate-800 rounded-xl p-4 flex flex-col justify-between">
                   <div>
                     <div className="flex items-center justify-between mb-2">
@@ -916,7 +917,7 @@ export default function App() {
                     </div>
                     <h4 className="text-sm font-semibold text-white mb-1.5">Coordinate Cell Lookup</h4>
                     <p className="text-xs text-slate-400 leading-relaxed">
-                      Directly queries the row-column intersection for the target metric and requested year. Automatically detects missing serial number offsets (such as Coimbatore on Page 101).
+                      Directly queries row-column intersections for the target metric and requested year, handling missing serial number offsets seamlessly.
                     </p>
                   </div>
                   <div className="mt-3 text-[11px] text-emerald-400 font-mono">
@@ -924,26 +925,24 @@ export default function App() {
                   </div>
                 </div>
 
-                {/* Phase 5 */}
                 <div className="bg-slate-950 border border-slate-800 rounded-xl p-4 flex flex-col justify-between">
                   <div>
                     <div className="flex items-center justify-between mb-2">
                       <span className="text-[10px] font-bold px-2 py-0.5 bg-indigo-500/10 text-indigo-400 border border-indigo-500/30 rounded-full">
                         Phase 5
                       </span>
-                      <span className="text-xs text-slate-500 font-mono">confidence.py</span>
+                      <span className="text-xs text-slate-500 font-mono">output_generator.py</span>
                     </div>
-                    <h4 className="text-sm font-semibold text-white mb-1.5">Confidence & Abstention Calibration</h4>
+                    <h4 className="text-sm font-semibold text-white mb-1.5">Strict JSONL Validation</h4>
                     <p className="text-xs text-slate-400 leading-relaxed">
-                      Calibrates confidence based on match quality. Emits <code className="text-amber-400">NOT_FOUND</code> with high confidence when an entity or concept is unsupported by document evidence.
+                      Strictly enforces required keys, digit formatting, confidence bounds [0, 1], and null pages for NOT_FOUND abstentions.
                     </p>
                   </div>
                   <div className="mt-3 text-[11px] text-emerald-400 font-mono">
-                    ✓ Reliable abstention score calibration
+                    ✓ Strict schema validation
                   </div>
                 </div>
 
-                {/* Phase 6 */}
                 <div className="bg-slate-950 border border-slate-800 rounded-xl p-4 flex flex-col justify-between">
                   <div>
                     <div className="flex items-center justify-between mb-2">
@@ -952,13 +951,13 @@ export default function App() {
                       </span>
                       <span className="text-xs text-slate-500 font-mono">server_daemon.py</span>
                     </div>
-                    <h4 className="text-sm font-semibold text-white mb-1.5">In-Memory Daemon & CLI</h4>
+                    <h4 className="text-sm font-semibold text-white mb-1.5">In-Memory Daemon & Stream Upload</h4>
                     <p className="text-xs text-slate-400 leading-relaxed">
-                      Spawns a persistent Python worker that retains the active PDF index in RAM for sub-second UI queries, while keeping <code className="text-indigo-300">main.py</code> clean and standalone for CLI batch evaluation.
+                      Streams incoming PDF uploads safely to disk and maintains an active in-memory index for sub-second UI queries and page inspections.
                     </p>
                   </div>
                   <div className="mt-3 text-[11px] text-emerald-400 font-mono">
-                    ✓ Sub-10ms query responses
+                    ✓ Safe streaming & fast RPC
                   </div>
                 </div>
               </div>
@@ -980,24 +979,24 @@ export default function App() {
                 </p>
               </div>
 
-              {/* Step 1 */}
               <div className="space-y-2">
                 <h4 className="text-sm font-semibold text-indigo-400 flex items-center gap-1.5">
                   <span className="w-5 h-5 rounded-full bg-indigo-500/20 text-indigo-400 flex items-center justify-center text-xs">
                     1
                   </span>
-                  System Installation
+                  System Installation & Prerequisites
                 </h4>
                 <div className="bg-slate-950 border border-slate-800 rounded-xl p-3 font-mono text-xs text-slate-300">
                   <code>
                     sudo apt-get update && sudo apt-get install -y python3 python3-pip poppler-utils tesseract-ocr
                     <br />
                     pip install -r solution/requirements.txt
+                    <br />
+                    npm install
                   </code>
                 </div>
               </div>
 
-              {/* Step 2 */}
               <div className="space-y-2">
                 <h4 className="text-sm font-semibold text-indigo-400 flex items-center gap-1.5">
                   <span className="w-5 h-5 rounded-full bg-indigo-500/20 text-indigo-400 flex items-center justify-center text-xs">
@@ -1012,7 +1011,6 @@ export default function App() {
                 </div>
               </div>
 
-              {/* Step 3 */}
               <div className="space-y-2">
                 <h4 className="text-sm font-semibold text-indigo-400 flex items-center gap-1.5">
                   <span className="w-5 h-5 rounded-full bg-indigo-500/20 text-indigo-400 flex items-center justify-center text-xs">
@@ -1027,12 +1025,11 @@ export default function App() {
                 </div>
               </div>
 
-              {/* Step 4: Submission zip */}
               <div className="bg-slate-950 border border-slate-800 rounded-xl p-4 flex items-center justify-between">
                 <div>
                   <h4 className="text-sm font-semibold text-white">Download Submission Bundle</h4>
                   <p className="text-xs text-slate-400 mt-0.5">
-                    Includes all modular Python files, requirements.txt, and README.md with AI tool declarations.
+                    Includes all modular Python files, requirements.txt, and README.md. Excludes cache and temp files.
                   </p>
                 </div>
                 <a
@@ -1045,7 +1042,6 @@ export default function App() {
                 </a>
               </div>
 
-              {/* Use of AI tools */}
               <div className="bg-slate-950/80 border border-slate-800 rounded-xl p-4">
                 <h4 className="text-xs font-bold text-slate-300 uppercase tracking-wider mb-2">
                   Use of AI Tools (Official Declaration)
@@ -1058,7 +1054,6 @@ export default function App() {
           </div>
         )}
 
-        {/* Modal: Inspected PDF Page Text */}
         {inspectedPage && (
           <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
             <div className="bg-slate-900 border border-slate-800 rounded-2xl max-w-3xl w-full max-h-[85vh] flex flex-col shadow-2xl">
@@ -1107,7 +1102,6 @@ export default function App() {
         )}
       </main>
 
-      {/* Footer */}
       <footer className="border-t border-slate-800 bg-slate-900/60 py-3 text-center text-xs text-slate-500">
         P5 · Report Navigator (LLM/RAG) · Offline CPU Solution for Hack Day Lucknow · 100% Accuracy on Practice Benchmark
       </footer>

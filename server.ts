@@ -4,7 +4,6 @@ import path from "path";
 import fs from "fs";
 import { spawn, ChildProcess } from "child_process";
 
-// Ensure uploads directory exists
 const UPLOADS_DIR = path.resolve(".", "uploads");
 if (!fs.existsSync(UPLOADS_DIR)) {
   fs.mkdirSync(UPLOADS_DIR, { recursive: true });
@@ -19,6 +18,7 @@ class PythonBridge {
   public activeFilename: string = "report_A.pdf (Default Report)";
   public numPages: number = 272;
   public reportYear: number = 2023;
+  public ocrStatus: string = "active";
   public isReady: boolean = false;
 
   constructor() {
@@ -60,7 +60,6 @@ class PythonBridge {
       setTimeout(() => this.startDaemon(), 1000);
     });
 
-    // Check status after start
     setTimeout(() => {
       this.sendCommand({ action: "status" }, (res) => {
         if (res.status === "ok") {
@@ -90,6 +89,7 @@ class PythonBridge {
           this.activeFilename = filename;
           this.numPages = res.num_pages;
           this.reportYear = res.report_year;
+          this.ocrStatus = res.ocr_status || "active";
           this.isReady = true;
         }
         resolve(res);
@@ -119,7 +119,7 @@ async function startServer() {
   const PORT = 3000;
   const bridge = new PythonBridge();
 
-  app.use(express.json({ limit: "150mb" }));
+  app.use(express.json({ limit: "50mb" }));
   app.use("/downloads", express.static(path.resolve(".", "public", "downloads")));
 
   // API 1: Get Active PDF Status
@@ -129,52 +129,83 @@ async function startServer() {
       path: bridge.activePdfPath,
       numPages: bridge.numPages,
       reportYear: bridge.reportYear,
+      ocrStatus: bridge.ocrStatus,
       isDefault: bridge.activePdfPath === DEFAULT_PDF_PATH,
       isReady: bridge.isReady,
     });
   });
 
-  // API 2: Upload PDF
-  app.post(
-    "/api/upload-pdf",
-    express.raw({ type: ["application/pdf", "application/octet-stream"], limit: "250mb" }),
-    async (req, res) => {
-      try {
-        const rawFilename = (req.query.filename as string) || "uploaded_report.pdf";
-        const cleanName = path.basename(rawFilename).replace(/[^a-zA-Z0-9._-]/g, "_");
-        const targetPath = path.join(UPLOADS_DIR, `${Date.now()}_${cleanName}`);
+  // API 2: Upload PDF with Safe Streaming (Task 5)
+  app.post("/api/upload-pdf", async (req, res) => {
+    const rawFilename = (req.query.filename as string) || "uploaded_report.pdf";
+    const cleanName = path.basename(rawFilename).replace(/[^a-zA-Z0-9._-]/g, "_");
+    const targetPath = path.join(UPLOADS_DIR, `${Date.now()}_${cleanName}`);
 
-        if (!req.body || !Buffer.isBuffer(req.body) || req.body.length < 10) {
-          return res.status(400).json({ error: "Invalid or empty PDF upload payload" });
+    const writeStream = fs.createWriteStream(targetPath);
+    let totalBytes = 0;
+    let uploadAborted = false;
+
+    req.on("data", (chunk) => {
+      totalBytes += chunk.length;
+      if (totalBytes > 250 * 1024 * 1024) {
+        uploadAborted = true;
+        req.destroy();
+        writeStream.close();
+        if (fs.existsSync(targetPath)) {
+          try { fs.unlinkSync(targetPath); } catch (e) {}
         }
-
-        // Verify PDF Magic Bytes (%PDF-)
-        const magic = req.body.subarray(0, 5).toString("ascii");
-        if (!magic.startsWith("%PDF")) {
-          return res.status(400).json({ error: "Uploaded file is not a valid PDF document (missing %PDF signature)" });
-        }
-
-        fs.writeFileSync(targetPath, req.body);
-        console.log(`Saved uploaded PDF (${(req.body.length / (1024 * 1024)).toFixed(2)} MB) to ${targetPath}`);
-
-        const result = await bridge.loadPdf(targetPath, cleanName);
-        if (result.status === "ok") {
-          res.json({
-            success: true,
-            filename: cleanName,
-            numPages: result.num_pages,
-            reportYear: result.report_year,
-            tablesIndexed: result.tables_indexed,
-          });
-        } else {
-          res.status(500).json({ error: result.message || "Failed to index uploaded PDF" });
-        }
-      } catch (err: any) {
-        console.error("Upload error:", err);
-        res.status(500).json({ error: err.message || "Upload failed" });
+        return res.status(413).json({ error: "Upload size exceeds 250MB limit." });
       }
+    });
+
+    try {
+      req.pipe(writeStream);
+
+      await new Promise((resolve, reject) => {
+        writeStream.on("finish", () => resolve(true));
+        writeStream.on("error", reject);
+      });
+
+      if (uploadAborted) return;
+
+      if (totalBytes < 10) {
+        if (fs.existsSync(targetPath)) fs.unlinkSync(targetPath);
+        return res.status(400).json({ error: "Empty or invalid file uploaded." });
+      }
+
+      // Validate PDF header magic bytes (%PDF)
+      const fd = fs.openSync(targetPath, "r");
+      const headerBuf = Buffer.alloc(5);
+      fs.readSync(fd, headerBuf, 0, 5, 0);
+      fs.closeSync(fd);
+
+      if (!headerBuf.toString("ascii").startsWith("%PDF")) {
+        if (fs.existsSync(targetPath)) fs.unlinkSync(targetPath);
+        return res.status(400).json({ error: "Uploaded file is not a valid PDF document (missing %PDF signature)." });
+      }
+
+      const result = await bridge.loadPdf(targetPath, cleanName);
+      if (result.status === "ok") {
+        res.json({
+          success: true,
+          filename: cleanName,
+          numPages: result.num_pages,
+          reportYear: result.report_year,
+          ocrStatus: result.ocr_status,
+          tablesIndexed: result.tables_indexed,
+        });
+      } else {
+        if (fs.existsSync(targetPath)) fs.unlinkSync(targetPath);
+        res.status(500).json({ error: result.message || "Failed to index uploaded PDF" });
+      }
+    } catch (err: any) {
+      console.error("Upload stream error:", err);
+      if (fs.existsSync(targetPath)) {
+        try { fs.unlinkSync(targetPath); } catch (e) {}
+      }
+      res.status(500).json({ error: err.message || "Upload stream failed" });
     }
-  );
+  });
 
   // API 3: Reset to Default Practice Report
   app.post("/api/reset-pdf", async (req, res) => {
@@ -185,6 +216,7 @@ async function startServer() {
         filename: bridge.activeFilename,
         numPages: bridge.numPages,
         reportYear: bridge.reportYear,
+        ocrStatus: bridge.ocrStatus,
       });
     } catch (err: any) {
       res.status(500).json({ error: err.message });
@@ -206,7 +238,7 @@ async function startServer() {
     }
   });
 
-  // API 5: Query Single Question (Uses active PDF dynamically)
+  // API 5: Query Single Question
   app.post("/api/ask", async (req, res) => {
     try {
       const { question, id } = req.body;
@@ -228,7 +260,7 @@ async function startServer() {
     }
   });
 
-  // API 6: Get Benchmark Scorecard
+  // API 6: Get Benchmark Scorecard (Task 3: Transparency labeling)
   app.get("/api/benchmark", (req, res) => {
     try {
       const qPath = path.resolve(".", "data", "questions_with_answers.jsonl");
@@ -276,6 +308,8 @@ async function startServer() {
         exactMatchPct: ((exactMatchCount / qLines.length) * 100).toFixed(2),
         pageMatchCount,
         pageMatchPct: ((pageMatchCount / qLines.length) * 100).toFixed(2),
+        source: "Precomputed Practice Benchmark (predictions.jsonl)",
+        isPrecomputed: true,
         items: detailed,
       });
     } catch (err: any) {
@@ -283,7 +317,7 @@ async function startServer() {
     }
   });
 
-  // API 7: Page Inspection (Uses Active PDF and validates real page count)
+  // API 7: Page Inspection
   app.get("/api/page/:num", async (req, res) => {
     try {
       const pageNum = parseInt(req.params.num, 10);
@@ -304,7 +338,6 @@ async function startServer() {
     }
   });
 
-  // Vite development middleware
   if (process.env.NODE_ENV !== "production") {
     const vite = await createViteServer({
       server: { middlewareMode: true },

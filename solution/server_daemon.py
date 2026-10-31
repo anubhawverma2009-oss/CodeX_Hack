@@ -28,13 +28,13 @@ class DaemonEngine:
         self.num_pages = 0
         self.report_year = 2023
 
-    def load_pdf(self, pdf_path: str, enable_ocr: bool = False):
+    def load_pdf(self, pdf_path: str, enable_ocr: bool = True):
         try:
             abs_path = os.path.abspath(pdf_path)
             if not os.path.exists(abs_path):
                 return {"status": "error", "message": f"File not found: {abs_path}"}
 
-            logger.info(f"Loading PDF: {abs_path}")
+            logger.info(f"Loading PDF with OCR enabled: {abs_path}")
             self.processor = PDFProcessor(pdf_path=abs_path, enable_ocr=enable_ocr)
             pages_text = self.processor.get_all_pages()
             self.num_pages = self.processor.num_pages
@@ -43,12 +43,14 @@ class DaemonEngine:
             self.answer_extractor = AnswerExtractor(self.table_extractor, pages_text, default_year=self.report_year)
             self.active_pdf_path = abs_path
 
-            logger.info(f"PDF loaded successfully. {self.num_pages} pages, report year {self.report_year}")
+            ocr_status = "active" if self.processor.ocr_processor.is_available() else "unavailable (tesseract/poppler not found)"
+            logger.info(f"PDF loaded successfully. {self.num_pages} pages, report year {self.report_year}, OCR: {ocr_status}")
             return {
                 "status": "ok",
                 "pdf_path": abs_path,
                 "num_pages": self.num_pages,
                 "report_year": self.report_year,
+                "ocr_status": ocr_status,
                 "tables_indexed": list(self.table_extractor.tables.keys())
             }
         except Exception as e:
@@ -106,12 +108,10 @@ class DaemonEngine:
 
 def main():
     engine = DaemonEngine()
-    # Default to practice report if it exists
     default_report = "public/assets/aistudio/report_A_90150542.pdf"
     if os.path.exists(default_report):
-        engine.load_pdf(default_report)
+        engine.load_pdf(default_report, enable_ocr=True)
 
-    # Read line-delimited JSON commands from stdin
     for line in sys.stdin:
         line = line.strip()
         if not line:
@@ -120,7 +120,7 @@ def main():
             msg = json.loads(line)
             action = msg.get("action")
             if action == "load_pdf":
-                res = engine.load_pdf(msg.get("pdf_path", ""))
+                res = engine.load_pdf(msg.get("pdf_path", ""), enable_ocr=True)
             elif action == "query":
                 res = engine.query(msg.get("question", ""), msg.get("id", "custom"))
             elif action == "get_page":
