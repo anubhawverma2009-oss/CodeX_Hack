@@ -1,0 +1,6 @@
+{
+  "name": "P5 - Report Navigator (LLM/RAG)",
+  "description": "Offline CPU-only PDF Report Navigator and Question-Answering System with exact tabular retrieval and citation benchmarking.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
