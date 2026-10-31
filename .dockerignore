@@ -1,0 +1,12 @@
+node_modules
+dist
+uploads/*
+!uploads/.gitkeep
+.git
+.gitignore
+.env
+.env.local
+*.pyc
+__pycache__
+.DS_Store
+*.log
