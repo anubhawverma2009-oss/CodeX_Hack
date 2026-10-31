@@ -1,7 +1,7 @@
 """
 PDF Processor for P5 - Report Navigator.
-Handles PDF ingestion, page-by-page text extraction, normalization,
-and OCR fallback for scanned pages.
+Handles runtime PDF ingestion, page-by-page text extraction, normalization,
+dynamic report year detection, and OCR fallback for scanned pages.
 """
 import os
 import re
@@ -15,11 +15,12 @@ logger = logging.getLogger("PDFProcessor")
 
 class PDFProcessor:
     def __init__(self, pdf_path: str, enable_ocr: bool = True):
-        self.pdf_path = pdf_path
+        self.pdf_path = os.path.abspath(pdf_path)
         self.enable_ocr = enable_ocr
         self.ocr_processor = OCRProcessor()
         self.pages_text: Dict[int, str] = {}
         self.num_pages: int = 0
+        self.report_year: int = 2023  # Dynamically updated
         self._load_document()
 
     def _load_document(self):
@@ -29,6 +30,20 @@ class PDFProcessor:
         reader = pypdf.PdfReader(self.pdf_path)
         self.num_pages = len(reader.pages)
         logger.info(f"Loaded PDF with {self.num_pages} pages: {self.pdf_path}")
+
+        # Detect report year from early pages (cover, title, foreword)
+        early_text = ""
+        for idx in range(min(5, self.num_pages)):
+            early_text += " " + (reader.pages[idx].extract_text() or "")
+        
+        year_matches = re.findall(r"(?:road accidents in india|calendar year|report)[^\d]{0,20}\b(20\d\d)\b", early_text, re.IGNORECASE)
+        if year_matches:
+            self.report_year = int(year_matches[0])
+        else:
+            # Fallback to highest 20xx found in first few pages
+            all_years = re.findall(r"\b(20[12]\d)\b", early_text)
+            if all_years:
+                self.report_year = max(int(y) for y in all_years)
 
         for idx, page in enumerate(reader.pages):
             page_num = idx + 1
@@ -57,8 +72,7 @@ class PDFProcessor:
         Removes commas, spaces, currency symbols, and converts to pure digits.
         Example: '1,50,177' -> '150177', '1230' -> '1230'
         """
-        cleaned = re.sub(r"[,\s]", "", val_str)
-        # Match only integer digits
+        cleaned = re.sub(r"[,\s]", "", str(val_str))
         match = re.search(r"^\d+", cleaned)
         if match:
             return match.group(0)

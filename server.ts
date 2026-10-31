@@ -2,36 +2,211 @@ import express from "express";
 import { createServer as createViteServer } from "vite";
 import path from "path";
 import fs from "fs";
-import { execFile, exec } from "child_process";
-import { promisify } from "util";
+import { spawn, ChildProcess } from "child_process";
 
-const execPromise = promisify(exec);
+// Ensure uploads directory exists
+const UPLOADS_DIR = path.resolve(".", "uploads");
+if (!fs.existsSync(UPLOADS_DIR)) {
+  fs.mkdirSync(UPLOADS_DIR, { recursive: true });
+}
+
+const DEFAULT_PDF_PATH = path.resolve(".", "public", "assets", "aistudio", "report_A_90150542.pdf");
+
+class PythonBridge {
+  private daemon: ChildProcess | null = null;
+  private pendingCallbacks: Array<(data: any) => void> = [];
+  public activePdfPath: string = DEFAULT_PDF_PATH;
+  public activeFilename: string = "report_A.pdf (Default Report)";
+  public numPages: number = 272;
+  public reportYear: number = 2023;
+  public isReady: boolean = false;
+
+  constructor() {
+    this.startDaemon();
+  }
+
+  public startDaemon() {
+    if (this.daemon) {
+      try {
+        this.daemon.kill();
+      } catch (e) {}
+    }
+
+    this.daemon = spawn("python3", ["solution/server_daemon.py"], {
+      stdio: ["pipe", "pipe", "inherit"],
+    });
+
+    let buffer = "";
+    this.daemon.stdout?.on("data", (chunk: Buffer) => {
+      buffer += chunk.toString();
+      const lines = buffer.split("\n");
+      buffer = lines.pop() || "";
+
+      for (const line of lines) {
+        if (!line.trim()) continue;
+        try {
+          const parsed = JSON.parse(line.trim());
+          const cb = this.pendingCallbacks.shift();
+          if (cb) cb(parsed);
+        } catch (err) {
+          console.error("Failed to parse daemon response:", line, err);
+        }
+      }
+    });
+
+    this.daemon.on("close", (code) => {
+      console.warn(`Python daemon exited with code ${code}. Restarting...`);
+      this.isReady = false;
+      setTimeout(() => this.startDaemon(), 1000);
+    });
+
+    // Check status after start
+    setTimeout(() => {
+      this.sendCommand({ action: "status" }, (res) => {
+        if (res.status === "ok") {
+          this.numPages = res.num_pages || 272;
+          this.reportYear = res.report_year || 2023;
+          this.isReady = true;
+          console.log(`Python Daemon ready. Pages: ${this.numPages}, Year: ${this.reportYear}`);
+        }
+      });
+    }, 1500);
+  }
+
+  public sendCommand(cmd: any, callback: (data: any) => void) {
+    if (!this.daemon || !this.daemon.stdin || !this.daemon.stdin.writable) {
+      callback({ status: "error", message: "Daemon not writable" });
+      return;
+    }
+    this.pendingCallbacks.push(callback);
+    this.daemon.stdin.write(JSON.stringify(cmd) + "\n");
+  }
+
+  public loadPdf(pdfPath: string, filename: string): Promise<any> {
+    return new Promise((resolve) => {
+      this.sendCommand({ action: "load_pdf", pdf_path: pdfPath }, (res) => {
+        if (res.status === "ok") {
+          this.activePdfPath = pdfPath;
+          this.activeFilename = filename;
+          this.numPages = res.num_pages;
+          this.reportYear = res.report_year;
+          this.isReady = true;
+        }
+        resolve(res);
+      });
+    });
+  }
+
+  public query(question: string, id: string = "custom"): Promise<any> {
+    return new Promise((resolve) => {
+      this.sendCommand({ action: "query", question, id }, (res) => {
+        resolve(res);
+      });
+    });
+  }
+
+  public getPage(pageNum: number): Promise<any> {
+    return new Promise((resolve) => {
+      this.sendCommand({ action: "get_page", page: pageNum }, (res) => {
+        resolve(res);
+      });
+    });
+  }
+}
 
 async function startServer() {
   const app = express();
   const PORT = 3000;
+  const bridge = new PythonBridge();
 
-  app.use(express.json());
-
-  // Static downloads folder
+  app.use(express.json({ limit: "150mb" }));
   app.use("/downloads", express.static(path.resolve(".", "public", "downloads")));
 
-  // API 1: List Practice Questions
+  // API 1: Get Active PDF Status
+  app.get("/api/active-pdf", (req, res) => {
+    res.json({
+      filename: bridge.activeFilename,
+      path: bridge.activePdfPath,
+      numPages: bridge.numPages,
+      reportYear: bridge.reportYear,
+      isDefault: bridge.activePdfPath === DEFAULT_PDF_PATH,
+      isReady: bridge.isReady,
+    });
+  });
+
+  // API 2: Upload PDF
+  app.post(
+    "/api/upload-pdf",
+    express.raw({ type: ["application/pdf", "application/octet-stream"], limit: "250mb" }),
+    async (req, res) => {
+      try {
+        const rawFilename = (req.query.filename as string) || "uploaded_report.pdf";
+        const cleanName = path.basename(rawFilename).replace(/[^a-zA-Z0-9._-]/g, "_");
+        const targetPath = path.join(UPLOADS_DIR, `${Date.now()}_${cleanName}`);
+
+        if (!req.body || !Buffer.isBuffer(req.body) || req.body.length < 10) {
+          return res.status(400).json({ error: "Invalid or empty PDF upload payload" });
+        }
+
+        // Verify PDF Magic Bytes (%PDF-)
+        const magic = req.body.subarray(0, 5).toString("ascii");
+        if (!magic.startsWith("%PDF")) {
+          return res.status(400).json({ error: "Uploaded file is not a valid PDF document (missing %PDF signature)" });
+        }
+
+        fs.writeFileSync(targetPath, req.body);
+        console.log(`Saved uploaded PDF (${(req.body.length / (1024 * 1024)).toFixed(2)} MB) to ${targetPath}`);
+
+        const result = await bridge.loadPdf(targetPath, cleanName);
+        if (result.status === "ok") {
+          res.json({
+            success: true,
+            filename: cleanName,
+            numPages: result.num_pages,
+            reportYear: result.report_year,
+            tablesIndexed: result.tables_indexed,
+          });
+        } else {
+          res.status(500).json({ error: result.message || "Failed to index uploaded PDF" });
+        }
+      } catch (err: any) {
+        console.error("Upload error:", err);
+        res.status(500).json({ error: err.message || "Upload failed" });
+      }
+    }
+  );
+
+  // API 3: Reset to Default Practice Report
+  app.post("/api/reset-pdf", async (req, res) => {
+    try {
+      const result = await bridge.loadPdf(DEFAULT_PDF_PATH, "report_A.pdf (Default Report)");
+      res.json({
+        success: true,
+        filename: bridge.activeFilename,
+        numPages: bridge.numPages,
+        reportYear: bridge.reportYear,
+      });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // API 4: List Practice Questions
   app.get("/api/questions", (req, res) => {
     try {
       const qPath = path.resolve(".", "data", "questions_with_answers.jsonl");
       if (!fs.existsSync(qPath)) {
         return res.status(404).json({ error: "Questions file not found" });
       }
-      const lines = fs.readFileSync(qPath, "utf-8").split("\n").filter(l => l.trim());
-      const questions = lines.map(l => JSON.parse(l));
+      const lines = fs.readFileSync(qPath, "utf-8").split("\n").filter((l) => l.trim());
+      const questions = lines.map((l) => JSON.parse(l));
       res.json({ questions, count: questions.length });
     } catch (err: any) {
       res.status(500).json({ error: err.message });
     }
   });
 
-  // API 2: Query Single Question
+  // API 5: Query Single Question (Uses active PDF dynamically)
   app.post("/api/ask", async (req, res) => {
     try {
       const { question, id } = req.body;
@@ -39,23 +214,21 @@ async function startServer() {
         return res.status(400).json({ error: "question string is required" });
       }
 
-      // Safe command execution
-      const sanitizedQ = question.replace(/"/g, '\\"');
-      const cmd = `python3 solution/query.py "${sanitizedQ}"`;
-      const { stdout } = await execPromise(cmd, { timeout: 15000 });
-      
-      const parsed = JSON.parse(stdout.trim());
-      if (id) {
-        parsed.id = id;
+      const qId = id || "custom";
+      const daemonResponse = await bridge.query(question, qId);
+
+      if (daemonResponse.status === "ok") {
+        res.json(daemonResponse.result);
+      } else {
+        res.status(500).json({ error: daemonResponse.message || "Query failed" });
       }
-      res.json(parsed);
     } catch (err: any) {
-      console.error("Query error:", err);
+      console.error("Query API error:", err);
       res.status(500).json({ error: err.message || "Execution error" });
     }
   });
 
-  // API 3: Get Benchmark Results
+  // API 6: Get Benchmark Scorecard
   app.get("/api/benchmark", (req, res) => {
     try {
       const qPath = path.resolve(".", "data", "questions_with_answers.jsonl");
@@ -65,16 +238,16 @@ async function startServer() {
         return res.status(404).json({ error: "Benchmark data not ready" });
       }
 
-      const qLines = fs.readFileSync(qPath, "utf-8").split("\n").filter(l => l.trim()).map(l => JSON.parse(l));
-      const pLines = fs.readFileSync(predPath, "utf-8").split("\n").filter(l => l.trim()).map(l => JSON.parse(l));
+      const qLines = fs.readFileSync(qPath, "utf-8").split("\n").filter((l) => l.trim()).map((l) => JSON.parse(l));
+      const pLines = fs.readFileSync(predPath, "utf-8").split("\n").filter((l) => l.trim()).map((l) => JSON.parse(l));
 
       const predMap = new Map<string, any>();
-      pLines.forEach(p => predMap.set(p.id, p));
+      pLines.forEach((p) => predMap.set(p.id, p));
 
       let exactMatchCount = 0;
       let pageMatchCount = 0;
 
-      const detailed = qLines.map(q => {
+      const detailed = qLines.map((q) => {
         const pred = predMap.get(q.id) || { answer: "NOT_FOUND", page: null, confidence: 0 };
         const isAnsMatch = String(pred.answer).trim() === String(q.answer).trim();
         const goldPgs: number[] = q.gold_pages || [];
@@ -93,7 +266,7 @@ async function startServer() {
           predPage: pred.page,
           confidence: pred.confidence,
           isAnsMatch,
-          isPageMatch
+          isPageMatch,
         };
       });
 
@@ -103,24 +276,29 @@ async function startServer() {
         exactMatchPct: ((exactMatchCount / qLines.length) * 100).toFixed(2),
         pageMatchCount,
         pageMatchPct: ((pageMatchCount / qLines.length) * 100).toFixed(2),
-        items: detailed
+        items: detailed,
       });
     } catch (err: any) {
       res.status(500).json({ error: err.message });
     }
   });
 
-  // API 4: Page Content Snippet
+  // API 7: Page Inspection (Uses Active PDF and validates real page count)
   app.get("/api/page/:num", async (req, res) => {
     try {
       const pageNum = parseInt(req.params.num, 10);
-      if (isNaN(pageNum) || pageNum < 1 || pageNum > 272) {
-        return res.status(400).json({ error: "Invalid page number" });
+      if (isNaN(pageNum) || pageNum < 1 || pageNum > bridge.numPages) {
+        return res.status(400).json({
+          error: `Invalid page number ${pageNum}. Document contains ${bridge.numPages} pages.`,
+        });
       }
 
-      const cmd = `python3 -c "import pypdf; r=pypdf.PdfReader('public/assets/aistudio/report_A_90150542.pdf'); print(r.pages[${pageNum - 1}].extract_text() or '')"`;
-      const { stdout } = await execPromise(cmd, { timeout: 10000 });
-      res.json({ page: pageNum, text: stdout });
+      const pageRes = await bridge.getPage(pageNum);
+      if (pageRes.status === "ok") {
+        res.json({ page: pageNum, totalPages: bridge.numPages, text: pageRes.text });
+      } else {
+        res.status(500).json({ error: pageRes.message });
+      }
     } catch (err: any) {
       res.status(500).json({ error: err.message });
     }
@@ -134,7 +312,6 @@ async function startServer() {
     });
     app.use(vite.middlewares);
   } else {
-    // Production static serving
     app.use(express.static(path.resolve(".", "dist")));
     app.get("*", (req, res) => {
       res.sendFile(path.resolve(".", "dist", "index.html"));
@@ -146,6 +323,6 @@ async function startServer() {
   });
 }
 
-startServer().catch(err => {
+startServer().catch((err) => {
   console.error("Failed to start server:", err);
 });

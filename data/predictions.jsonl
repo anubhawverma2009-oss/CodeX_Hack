@@ -42,7 +42,7 @@
 {"id": "P041", "answer": "74", "page": 241, "confidence": 0.98}
 {"id": "P042", "answer": "2064", "page": 101, "confidence": 0.98}
 {"id": "P043", "answer": "53", "page": 244, "confidence": 0.98}
-{"id": "P044", "answer": "NOT_FOUND", "page": null, "confidence": 0.95}
+{"id": "P044", "answer": "NOT_FOUND", "page": null, "confidence": 0.9}
 {"id": "P045", "answer": "848", "page": 101, "confidence": 0.98}
 {"id": "P046", "answer": "515", "page": 244, "confidence": 0.98}
 {"id": "P047", "answer": "2884", "page": 61, "confidence": 0.98}

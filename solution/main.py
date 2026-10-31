@@ -42,16 +42,17 @@ def run_pipeline(pdf_path: str, questions_path: str, output_path: str, eval_mode
     print("[1/4] Ingesting and indexing PDF pages...")
     pdf_proc = PDFProcessor(pdf_path=pdf_path, enable_ocr=enable_ocr)
     pages_text = pdf_proc.get_all_pages()
-    print(f"      Total indexed pages: {len(pages_text)}")
+    report_year = pdf_proc.report_year
+    print(f"      Total indexed pages: {len(pages_text)} | Detected Report Year: {report_year}")
 
     # 2. Extract and index tables
     print("[2/4] Parsing structured tables and statistical annexures...")
-    table_extractor = TableExtractor(pages_text)
+    table_extractor = TableExtractor(pages_text, default_year=report_year)
     print(f"      Indexed {len(table_extractor.tables)} table sections: {list(table_extractor.tables.keys())}")
 
     # 3. Answer questions
     print("[3/4] Processing queries and extracting answers...")
-    answer_extractor = AnswerExtractor(table_extractor, pages_text)
+    answer_extractor = AnswerExtractor(table_extractor, pages_text, default_year=report_year)
 
     questions = []
     with open(questions_path, "r", encoding="utf-8") as f:
