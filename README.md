@@ -1,6 +1,7 @@
 # P5 – Report Navigator (LLM/RAG)
 
 **CodeXHack – Hack Day Lucknow**
+Project URL : https://codex-hack-1.onrender.com/
 
 An offline PDF question-answering system for extracting numerical information from large statistical reports.
 
