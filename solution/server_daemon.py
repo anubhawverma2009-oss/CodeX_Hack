@@ -2,12 +2,13 @@
 """
 Server Daemon for P5 - Report Navigator.
 Keeps the active PDF index in-memory for sub-second web queries and page inspection.
-Communicates via JSON-RPC lines on stdin/stdout with request ID tracking.
+Communicates via JSON-RPC lines on stdin/stdout with request ID tracking and timestamp logging.
 """
 import sys
 import os
 import json
 import logging
+import datetime
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
@@ -29,12 +30,13 @@ class DaemonEngine:
         self.report_year = 2023
 
     def load_pdf(self, pdf_path: str, enable_ocr: bool = True):
+        start_time = datetime.datetime.now()
+        logger.info(f"[{start_time.isoformat()}] Python load_pdf started for: {pdf_path}")
         try:
             abs_path = os.path.abspath(pdf_path)
             if not os.path.exists(abs_path):
                 return {"status": "error", "message": f"File not found: {abs_path}"}
 
-            logger.info(f"Loading PDF (lazy OCR enabled): {abs_path}")
             self.processor = PDFProcessor(pdf_path=abs_path, enable_ocr=enable_ocr)
             pages_text = self.processor.get_all_pages()
             self.num_pages = self.processor.num_pages
@@ -43,8 +45,10 @@ class DaemonEngine:
             self.answer_extractor = AnswerExtractor(self.table_extractor, pages_text, default_year=self.report_year, pdf_processor=self.processor)
             self.active_pdf_path = abs_path
 
+            duration = (datetime.datetime.now() - start_time).total_seconds()
+            logger.info(f"[{datetime.datetime.now().isoformat()}] Python load_pdf completed in {duration:.3f}s. Pages: {self.num_pages}, Year: {self.report_year}")
+            
             ocr_status = "active" if self.processor.ocr_processor.is_available() else "unavailable (tesseract/poppler not found)"
-            logger.info(f"PDF loaded successfully. {self.num_pages} pages, report year {self.report_year}, OCR: {ocr_status}")
             return {
                 "status": "ok",
                 "pdf_path": abs_path,
@@ -58,6 +62,9 @@ class DaemonEngine:
             return {"status": "error", "message": str(e)}
 
     def query(self, question: str, q_id: str = "custom"):
+        start_time = datetime.datetime.now()
+        logger.info(f"[{start_time.isoformat()}] Python query started: '{question}' (id: {q_id})")
+        
         if not self.answer_extractor:
             return {"status": "error", "message": "No active PDF loaded"}
 
@@ -70,6 +77,9 @@ class DaemonEngine:
                 p_text = self.processor.get_page_text(res["page"])
                 lines = [l for l in p_text.split('\n') if l.strip()]
                 snippet = "\n".join(lines[:12])
+
+            duration = (datetime.datetime.now() - start_time).total_seconds()
+            logger.info(f"[{datetime.datetime.now().isoformat()}] Python query completed in {duration:.3f}s. Answer: {res.get('answer')}, Page: {res.get('page')}")
 
             return {
                 "status": "ok",

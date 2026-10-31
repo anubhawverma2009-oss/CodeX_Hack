@@ -70,10 +70,7 @@ class PDFProcessor:
         return text
 
     def get_all_pages(self) -> Dict[int, str]:
-        """Returns all pages, triggering lazy OCR for sparse pages if accessed."""
-        for p in range(1, self.num_pages + 1):
-            if len(self.pages_text.get(p, "")) < 30:
-                self.get_page_text(p)
+        """Returns all pages instantly without forcing upfront batch OCR."""
         return self.pages_text
 
     @staticmethod
