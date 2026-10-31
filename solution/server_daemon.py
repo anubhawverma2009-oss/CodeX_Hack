@@ -3,6 +3,7 @@
 Server Daemon for P5 - Report Navigator.
 Keeps the active PDF index in-memory for sub-second web queries and page inspection.
 Communicates via JSON-RPC lines on stdin/stdout with request ID tracking and timestamp logging.
+All logs are directed to sys.stderr to ensure stdout contains only pure JSON-RPC messages.
 """
 import sys
 import os
@@ -17,7 +18,7 @@ from table_extractor import TableExtractor
 from answer_extractor import AnswerExtractor
 from retriever import QueryAnalysis
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
+logging.basicConfig(level=logging.INFO, stream=sys.stderr, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger("ServerDaemon")
 
 class DaemonEngine:
